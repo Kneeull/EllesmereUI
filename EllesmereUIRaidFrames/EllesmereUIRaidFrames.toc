@@ -1,0 +1,16 @@
+﻿## Interface: 120000, 120001
+## Title: |cff0cd29fEllesmereUI|r Raid Frames
+## Category: |cff0cd29fEllesmere|rUI
+## Group: EllesmereUI
+## Notes: Party/Raid Frames
+## Author: Ellesmere
+## Version: 2.7
+## Dependencies: EllesmereUI
+## SavedVariables: EllesmereUIRaidFramesDB
+## IconTexture: Interface\AddOns\EllesmereUI\media\eg-logo.tga
+
+# Main Luas
+EllesmereUIRaidFrames.lua
+
+# Options
+EUI_RaidFrames_Options.lua
