@@ -590,24 +590,6 @@ do
         local lockedSpecs = {}
         local disabledSpecs = opts.disabledSpecs or {}
         local preCheckedSpecs = opts.preCheckedSpecs
-        do
-            local fullMap = db and db[dbKey]
-            if fullMap then
-                for pKey, specList in pairs(fullMap) do
-                    if pKey ~= presetKey and type(specList) == "table" then
-                        for sID in pairs(specList) do
-                            local dName
-                            if pKey == "custom" then dName = "Custom"
-                            elseif pKey == "ellesmereui" then dName = "EllesmereUI"
-                            elseif pKey == "spinthewheel" then dName = "Spin the Wheel"
-                            elseif pKey:sub(1, 5) == "user:" then dName = pKey:sub(6)
-                            else dName = pKey end
-                            lockedSpecs[sID] = dName
-                        end
-                    end
-                end
-            end
-        end
 
         -- Pre-check specs if requested
         if preCheckedSpecs then
@@ -699,16 +681,15 @@ do
                     row._lbl:SetText(spec.name)
                     row._specID = spec.id
 
-                    local lockedBy = lockedSpecs[spec.id]
                     local disabledTip = disabledSpecs[spec.id]
-                    row._locked = lockedBy ~= nil
+                    row._locked = false
                     row._disabled = disabledTip ~= nil
 
                     local checked = assignments[spec.id] == true
                     row._checked = checked
                     local EG = ELLESMERE_GREEN
                     local function UpdateVisual(r)
-                        if r._locked or r._disabled then
+                        if r._disabled then
                             r._check:Hide()
                             r._boxBorder:SetColor(BORDER_R, BORDER_G, BORDER_B, CB_BRD_A * 0.4)
                             r._boxBg:SetColorTexture(CB_BOX_R, CB_BOX_G, CB_BOX_B, 0.35)
@@ -729,7 +710,7 @@ do
                     allCheckboxes[#allCheckboxes + 1] = row
 
                     row:SetScript("OnClick", function(self)
-                        if self._locked or self._disabled then return end
+                        if self._disabled then return end
                         self._checked = not self._checked
                         assignments[spec.id] = self._checked or nil
                         UpdateVisual(self)
@@ -739,12 +720,12 @@ do
                             EllesmereUI.ShowWidgetTooltip(self._box,
                                 EllesmereUI.DisabledTooltip(disabledTip))
                         end
-                        if self._locked or self._disabled then return end
+                        if self._disabled then return end
                         self._lbl:SetTextColor(1, 1, 1, 0.90)
                     end)
                     row:SetScript("OnLeave", function(self)
                         EllesmereUI.HideWidgetTooltip()
-                        if self._locked or self._disabled then return end
+                        if self._disabled then return end
                         self._lbl:SetTextColor(1, 1, 1, 0.65)
                     end)
 
@@ -757,7 +738,7 @@ do
         specPopup._checkAll:SetScript("OnClick", function()
             local EG2 = ELLESMERE_GREEN
             for _, row in ipairs(allCheckboxes) do
-                if not row._locked and not row._disabled then
+                if not row._disabled then
                     row._checked = true
                     assignments[row._specID] = true
                     row._check:Show()
@@ -767,7 +748,7 @@ do
         end)
         specPopup._uncheckAll:SetScript("OnClick", function()
             for _, row in ipairs(allCheckboxes) do
-                if not row._locked and not row._disabled then
+                if not row._disabled then
                     row._checked = false
                     assignments[row._specID] = nil
                     row._check:Hide()
