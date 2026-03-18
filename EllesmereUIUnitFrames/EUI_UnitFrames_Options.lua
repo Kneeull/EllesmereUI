@@ -90,6 +90,17 @@ initFrame:SetScript("OnEvent", function(self)
     ---------------------------------------------------------------------------
     local selectedUnit = "player"
 
+    -- Allow external code to pre-select a unit before page rebuild.
+    -- Two mechanisms: direct setter + pending override consumed at page build time.
+    EllesmereUI._setUnitFrameUnit = function(unit) selectedUnit = unit end
+    EllesmereUI._consumePendingUnitSelect = function()
+        local pending = EllesmereUI._pendingUnitSelect
+        if pending then
+            selectedUnit = pending
+            EllesmereUI._pendingUnitSelect = nil
+        end
+    end
+
     local unitLabels = {
         ["player"]       = "Player",
         ["target"]       = "Target",
@@ -443,7 +454,7 @@ initFrame:SetScript("OnEvent", function(self)
             for _, tex in ipairs(texList) do tex:AddMaskTexture(pFrame._shapeMask) end
         end
 
-        -- Hide legacy square border textures if they exist
+        -- Hide old square border textures if they exist on this frame
         if pFrame._sqBorderTexs then
             for _, t in ipairs(pFrame._sqBorderTexs) do t:Hide() end
         end
@@ -2283,9 +2294,17 @@ initFrame:SetScript("OnEvent", function(self)
             local th = bh2 + btbExtra + (ch > 0 and ch or 0)
             pf:SetSize(tw, th)
 
-            -- Apply frame scale to preview
-            local fScale = (s.frameScale or 100) / 100
-            local combinedScale = (pf._previewScale or 1) * fScale
+            -- Apply preview scale; shrink to fit when the frame is wider than the panel
+            local baseScale = pf._previewScale or 1
+            local fitScale = 1
+            do
+                local PAD = EllesmereUI.CONTENT_PAD or 10
+                local availW = (pf:GetParent():GetWidth() - PAD * 2) / baseScale
+                if tw > availW and tw > 0 and availW > 0 then
+                    fitScale = availW / tw
+                end
+            end
+            local combinedScale = baseScale * fitScale
             pf:SetScale(combinedScale)
 
             -- Recalculate border sizes after scale change so they stay pixel-perfect
@@ -2608,8 +2627,8 @@ initFrame:SetScript("OnEvent", function(self)
     --  Page Builders
     ---------------------------------------------------------------------------
 
-    -- General tab removed settings migrated to per-unit DISPLAY section,
-    -- positioning migrated to Unlock Mode.
+    -- General tab removed; per-unit settings live in DISPLAY sections,
+    -- positioning lives in Unlock Mode.
 
     ---------------------------------------------------------------------------
     --  MULTI FRAME EDIT TAB  (checkbox selector + shared per-unit settings)
@@ -2804,7 +2823,7 @@ initFrame:SetScript("OnEvent", function(self)
                   UNIT_DB_MAP[selectedUnit]().barVisibility = v
                   -- Sync enabledFrames: "never" disables the frame entirely
                   db.profile.enabledFrames[selectedUnit] = (v ~= "never")
-                  -- Keep legacy keys in sync for safety
+                  -- Keep boolean keys in sync for safety
                   local s = UNIT_DB_MAP[selectedUnit]()
                   if v == "always" then
                       s.showInRaid = true; s.showInParty = true; s.showSolo = true
@@ -2936,58 +2955,25 @@ initFrame:SetScript("OnEvent", function(self)
             })
         end
 
-        -- Row 2: Frame Scale | Border (slider + double inline swatches)
+        -- Row 2: Border (slider + double inline swatches) | Dark Mode
         local sharedScaleBorderRow
         sharedScaleBorderRow, h = W:DualRow(parent, y,
-            { type="slider", text="Frame Scale", min=50, max=200, step=1,
-              getValue=function() return SVal("frameScale", 100) end,
-              setValue=function(v) SSet("frameScale", v) end },
             { type="slider", text="Border",
               min=0, max=4, step=1,
               getValue=function() return SVal("borderSize", 1) end,
               setValue=function(v)
                   SSet("borderSize", v); ReloadAndUpdate()
+              end },
+            { type="toggle", text="Dark Mode",
+              getValue=function() return db.profile.darkTheme end,
+              setValue=function(v)
+                  db.profile.darkTheme = v
+                  ReloadAndUpdate(); UpdatePreview()
+                  EllesmereUI:RefreshPage()
               end });  y = y - h
-        -- Sync icon: Frame Scale (left)
+        -- Sync icon: Border Size (left)
         do
             local rgn = sharedScaleBorderRow._leftRegion
-            EllesmereUI.BuildSyncIcon({
-                region  = rgn,
-                tooltip = "Apply Frame Scale to all Frames",
-                onClick = function()
-                    local v = UNIT_DB_MAP[selectedUnit]().frameScale or 100
-                    for _, key in ipairs(GROUP_UNIT_ORDER) do
-                        if key ~= selectedUnit then
-                            UNIT_DB_MAP[key]().frameScale = v
-                        end
-                    end
-                    ReloadAndUpdate(); EllesmereUI:RefreshPage()
-                end,
-                isSynced = function()
-                    local v = UNIT_DB_MAP[selectedUnit]().frameScale or 100
-                    for _, key in ipairs(GROUP_UNIT_ORDER) do
-                        if (UNIT_DB_MAP[key]().frameScale or 100) ~= v then return false end
-                    end
-                    return true
-                end,
-                flashTargets = function() return { rgn } end,
-                multiApply = {
-                    elementKeys   = GROUP_UNIT_ORDER,
-                    elementLabels = SHORT_LABELS,
-                    getCurrentKey = function() return selectedUnit end,
-                    onApply       = function(checkedKeys)
-                        local v = UNIT_DB_MAP[selectedUnit]().frameScale or 100
-                        for _, key in ipairs(checkedKeys) do
-                            UNIT_DB_MAP[key]().frameScale = v
-                        end
-                        ReloadAndUpdate(); EllesmereUI:RefreshPage()
-                    end,
-                },
-            })
-        end
-        -- Sync icon: Border Size (right)
-        do
-            local rgn = sharedScaleBorderRow._rightRegion
             EllesmereUI.BuildSyncIcon({
                 region  = rgn,
                 tooltip = "Apply Border to all Frames",
@@ -3038,15 +3024,15 @@ initFrame:SetScript("OnEvent", function(self)
                 },
             })
         end
-        -- Double inline swatches on Border slider (right region): left = Highlight, right = Border
+        -- Double inline swatches on Border slider (left region): left = Highlight, right = Border
         do
-            local rightRgn = sharedScaleBorderRow._rightRegion
-            local ctrl = rightRgn._control
+            local leftRgn = sharedScaleBorderRow._leftRegion
+            local ctrl = leftRgn._control
             local PP = EllesmereUI.PP
 
             -- Right swatch: Border color (with alpha)
             local borderSwatch, updateBorderSwatch = EllesmereUI.BuildColorSwatch(
-                rightRgn, sharedScaleBorderRow:GetFrameLevel() + 3,
+                leftRgn, sharedScaleBorderRow:GetFrameLevel() + 3,
                 function()
                     local c = SGet("borderColor") or { r = 0, g = 0, b = 0 }
                     return c.r, c.g, c.b, SVal("borderAlpha", 1)
@@ -3065,7 +3051,7 @@ initFrame:SetScript("OnEvent", function(self)
 
             -- Left swatch: Highlight color (with alpha)
             local hlSwatch, updateHlSwatch = EllesmereUI.BuildColorSwatch(
-                rightRgn, sharedScaleBorderRow:GetFrameLevel() + 3,
+                leftRgn, sharedScaleBorderRow:GetFrameLevel() + 3,
                 function()
                     local c = SGet("highlightColor") or { r = 1, g = 1, b = 1 }
                     return c.r, c.g, c.b, SVal("highlightAlpha", 1)
@@ -3085,19 +3071,13 @@ initFrame:SetScript("OnEvent", function(self)
             EllesmereUI.RegisterWidgetRefresh(function() updateBorderSwatch(); updateHlSwatch() end)
         end
 
-        -- Row 3: Bar Texture | Dark Mode
+        -- Row 3: Bar Texture
         local sharedTexDarkRow
         sharedTexDarkRow, h = W:DualRow(parent, y,
             { type="dropdown", text="Bar Texture", values=hbtValues, order=hbtOrder,
               getValue=function() return SVal("healthBarTexture", "none") end,
               setValue=function(v) SSet("healthBarTexture", v); ReloadAndUpdate(); UpdatePreview() end },
-            { type="toggle", text="Dark Mode",
-              getValue=function() return db.profile.darkTheme end,
-              setValue=function(v)
-                  db.profile.darkTheme = v
-                  ReloadAndUpdate(); UpdatePreview()
-                  EllesmereUI:RefreshPage()
-              end });  y = y - h
+            { type="label", text="" });  y = y - h
         -- Sync icon: Health Bar Texture (left)
         do
             local rgn = sharedTexDarkRow._leftRegion
@@ -6358,6 +6338,9 @@ initFrame:SetScript("OnEvent", function(self)
             btbCenterText= { section = sharedBtbHeader,      target = sharedBtbCenterRow, slotSide = "left" },
             btbClassIcon = { section = sharedBtbHeader,      target = sharedBtbCenterRow, slotSide = "right" },
             combatIndicator = { section = sharedAddHeader, target = sharedAddRow1, slotSide = "right" },
+            castBar      = { section = sharedCastHeader,     target = sharedCastRow1 },
+            castIcon     = { section = sharedCastHeader,     target = sharedCastRow1 },
+            castName     = { section = sharedCastHeader,     target = sharedCastRow1 },
         }
 
         return y
@@ -6368,8 +6351,12 @@ initFrame:SetScript("OnEvent", function(self)
     ---------------------------------------------------------------------------
     local _displayHeaderBuilder
     local displayHeaderFixedH = 0
+    local BuildFoTToTOptions, BuildPetOptions, BuildBossOptions
 
     local function BuildFrameDisplayPage(pageName, parent, yOffset)
+        -- Consume any pending unit selection from Element Options navigation
+        if EllesmereUI._consumePendingUnitSelect then EllesmereUI._consumePendingUnitSelect() end
+
         local W = EllesmereUI.Widgets
         local y = yOffset
         local _, h
@@ -6680,16 +6667,6 @@ initFrame:SetScript("OnEvent", function(self)
                 ReloadAndUpdate()
               end });  y = y - h
 
-        -- Row: Frame Scale (solo)
-        local scaleRow
-        scaleRow, h = W:DualRow(parent, y,
-            { type="slider", text="Frame Scale", min=50, max=200, step=1,
-              getValue=function() return settingsTable.frameScale or 100 end,
-              setValue=function(v)
-                settingsTable.frameScale = v
-                ReloadAndUpdate()
-              end }, { type="label", text="" });  y = y - h
-
         -- TEXT section
         local textHeader
         textHeader, h = W:SectionHeader(parent, "TEXT", y); y = y - h
@@ -6733,7 +6710,7 @@ initFrame:SetScript("OnEvent", function(self)
         return y, displayHeader, sizeRow, textHeader, textRow, enableRowFrame
     end
 
-    local function BuildFoTToTOptions(W, parent, y)
+    BuildFoTToTOptions = function(W, parent, y)
         local _, h
 
         local function enableRow(Ww, pp, yy)
@@ -6765,7 +6742,7 @@ initFrame:SetScript("OnEvent", function(self)
         return abs(y)
     end
 
-    local function BuildPetOptions(W, parent, y)
+    BuildPetOptions = function(W, parent, y)
         local _, h
 
         local portraitRow
@@ -6800,7 +6777,7 @@ initFrame:SetScript("OnEvent", function(self)
         return abs(y)
     end
 
-    local function BuildBossOptions(W, parent, y)
+    BuildBossOptions = function(W, parent, y)
         local _, h
 
         local portraitRow

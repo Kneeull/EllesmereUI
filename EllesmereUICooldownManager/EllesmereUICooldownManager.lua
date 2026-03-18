@@ -5,7 +5,7 @@
 --  desaturation, active state animations, and per-spec profiles.
 --  Does NOT parse secret values works around restricted APIs.
 -------------------------------------------------------------------------------
-local ADDON_NAME, ns = ...
+local _, ns = ...
 local ECME = EllesmereUI.Lite.NewAddon("EllesmereUICooldownManager")
 ns.ECME = ECME
 
@@ -24,7 +24,6 @@ local floor = math.floor
 local GetTime = GetTime
 local InCombatLockdown = InCombatLockdown
 local GetSpecialization = GetSpecialization
-local GetSpecializationInfo = GetSpecializationInfo
 
 ns.DEFAULT_MAPPING_NAME = "Buff Name (eg: Divine Purpose)"
 
@@ -265,6 +264,7 @@ local _activeMultiScratch = {}      -- reusable scratch table for active multi-c
 
 -- Reusable spell list buffers -- avoids table allocation every tick in update functions
 local _combinedBuf = {}   -- reused by UpdateTrackedBarIcons for tracked+extra spell list
+local _combinedSeen = {}  -- reused by UpdateTrackedBarIcons for extra-spell dedup
 local _spellsBuf   = {}   -- reused by UpdateCustomBarIcons for racial-substituted spell list
 
 -- Duration-based active timers for custom buff bars.
@@ -277,14 +277,23 @@ local _customBarTimers = {}
 -- customSpellDurations; the first active timer wins for display.
 -- { name, icon, duration, spellIDs }
 ns.BUFF_BAR_PRESETS = {
-    { name = "Bloodlust / Heroism", icon = 132131,  duration = 40,
+    { name = UnitFactionGroup("player") == "Horde" and "Bloodlust" or "Heroism",
+      icon = 132313, duration = 40,
       spellIDs = { 2825, 32182, 80353, 264667, 390386, 381301, 444062, 444257 } },
-    { name = "Light's Potential",   icon = 754891,  duration = 30,
+    { name = "Light's Potential",   icon = 7548911, duration = 30,
       spellIDs = { 1236616, 431932 } },
-    { name = "Potion of Recklessness", icon = 754891, duration = 30,
+    { name = "Potion of Recklessness", icon = 7548916, duration = 30,
       spellIDs = { 1236994 } },
-    { name = "Invisibility Potion", icon = 241302,  duration = 18,
-      spellIDs = { 1236551, 431424, 371134, 371125, 371133 } },
+    { name = "Invisibility Potion", icon = 134764,  duration = 18,
+      spellIDs = { 371125, 431424, 371133, 371134, 1236551 } },
+    { name = "Call Dreadstalkers",   icon = 1378282, duration = 12,
+      spellIDs = { 104316 }, class = "WARLOCK" },
+    { name = "Summon Demonic Tyrant", icon = 2065628, duration = 15,
+      spellIDs = { 265187 }, class = "WARLOCK" },
+    { name = "Summon Vilefiend",    icon = 1616211, duration = 15,
+      spellIDs = { 264119 }, class = "WARLOCK" },
+    { name = "Grimoire: Felguard",  icon = 136216,  duration = 17,
+      spellIDs = { 111898 }, class = "WARLOCK" },
 }
 
 -- Reusable children buffer for the per-tick viewer scan -- avoids GetChildren vararg allocation
@@ -442,6 +451,18 @@ local function FindCDMChildByCooldownID(cooldownID)
         end
     end
     return nil
+end
+
+-- Check whether a spellID has a Blizzard CDM child (i.e. is "Displayed").
+-- Used by the options preview to show the untracked overlay.
+function ns.IsSpellInBlizzCDM(spellID)
+    if not spellID then return false end
+    -- Fast path: check the per-tick all-child cache first
+    if _tickBlizzAllChildCache[spellID] then return true end
+    -- Slow path: resolve via cooldownID
+    local cdID = _spellToCooldownID[spellID]
+    if cdID and FindCDMChildByCooldownID(cdID) then return true end
+    return false
 end
 
 -- Keybind cache: built once out-of-combat, looked up per tick
@@ -711,6 +732,45 @@ local function ApplyTrinketCooldown(icon, slot, desatOnCD)
 end
 
 -------------------------------------------------------------------------------
+--  Pandemic glow helper (buff bars only)
+--  Shows pixel glow (or shape glow for shaped icons) when the Blizzard CDM
+--  child frame's PandemicIcon is visible, indicating the buff is refreshable.
+-------------------------------------------------------------------------------
+local function ApplyPandemicGlow(icon, blizzChild, barData)
+    if not barData.pandemicGlow then
+        if icon._pandemicGlowActive then
+            -- Only stop if no other glow owns the overlay
+            if not icon._procGlowActive and not icon._isActive then
+                StopNativeGlow(icon._glowOverlay)
+            end
+            icon._pandemicGlowActive = false
+        end
+        return
+    end
+    local isPandemic = blizzChild
+        and blizzChild.PandemicIcon
+        and blizzChild.PandemicIcon.IsShown
+        and blizzChild.PandemicIcon:IsShown()
+    if isPandemic then
+        if not icon._pandemicGlowActive
+           and not icon._procGlowActive
+           and not (icon._glowOverlay and icon._glowOverlay._glowActive) then
+            local style = (icon._shapeApplied and icon._shapeName) and 2 or 1
+            local cr = barData.pandemicR or 1
+            local cg = barData.pandemicG or 1
+            local cb = barData.pandemicB or 0
+            StartNativeGlow(icon._glowOverlay, style, cr, cg, cb)
+            icon._pandemicGlowActive = true
+        end
+    elseif icon._pandemicGlowActive then
+        if not icon._procGlowActive and not icon._isActive then
+            StopNativeGlow(icon._glowOverlay)
+        end
+        icon._pandemicGlowActive = false
+    end
+end
+
+-------------------------------------------------------------------------------
 --  Active state animation helper (aura glow / swipe color)
 --  Handles transition between active and inactive visual states.
 -------------------------------------------------------------------------------
@@ -948,9 +1008,6 @@ local DEFAULTS = {
         -- _capturedOnce = nil,
         -- CDM Look
         reskinBorders   = true,
-        utilityScale    = 1.0,
-        buffBarScale    = 1.0,
-        cooldownBarScale = 1.0,
         -- Bar Glows (per-spec)
         spec            = {},
         activeSpecKey   = "0",
@@ -959,93 +1016,20 @@ local DEFAULTS = {
             enabled = true,
             selectedBar = 1,
             selectedButton = nil,
-            selectedAssignment = 1,
             assignments = {},  -- ["barIdx_btnIdx"] = { {spellID, glowStyle, glowColor, classColor, mode}, ... }
         },
-        -- Buff Bars (legacy  kept for migration)
-        buffBars = {
-            enabled     = false,
-            width       = 200,
-            height      = 18,
-            spacing     = 2,
-            maxBars     = 8,
-            growUp      = false,
-            showTimer   = true,
-            showIcon    = true,
-            iconSize    = 18,
-            borderSize  = 1,
-            borderR     = 0, borderG = 0, borderB = 0, borderA = 1,
-            bgAlpha     = 0.4,
-            barR        = 0.05, barG = 0.82, barB = 0.62,
-            useClassColor = false,
-            filterMode  = "all",  -- "all", "whitelist", "blacklist"
-            filterList  = "",
-            locked      = false,
-            offsetX     = 300,
-            offsetY     = -200,
-        },
         -- Tracked Buff Bars v2 (per-bar buff tracking with individual settings)
-        -- Note: not in defaults ΓÇö lazy-initialized by ns.GetTrackedBuffBars() to avoid AceDB merge issues
+        -- Note: not in defaults -- lazy-initialized by ns.GetTrackedBuffBars()
         -- CDM Bars (our replacement for Blizzard CDM)
         cdmBars = {
             enabled = true,
             hideBlizzard = true,
-            -- Default bar template (applied to each bar)
-            barDefaults = {
-                iconSize    = 36,
-                numRows     = 1,
-                spacing     = 2,
-                borderSize  = 1,
-                borderR     = 0, borderG = 0, borderB = 0, borderA = 1,
-                borderClassColor = false,
-                bgR         = 0.08, bgG = 0.08, bgB = 0.08, bgA = 0.6,
-                iconZoom    = 0.08,
-                iconShape   = "none",
-                growDirection = "RIGHT",
-                verticalOrientation = false,
-                barBgEnabled = false,
-                barBgAlpha  = 1.0,
-                barBgR = 0, barBgG = 0, barBgB = 0,
-                showCooldownText = true,
-                cooldownFontSize = 12,
-                showCharges = true,
-                chargeFontSize = 11,
-                desaturateOnCD = true,
-                swipeAlpha  = 0.7,
-                borderThickness = "thin",
-                activeStateAnim = "blizzard",
-                activeAnimClassColor = false,
-                activeAnimR = 1.0, activeAnimG = 0.85, activeAnimB = 0.0,
-                anchorTo = "none",
-                anchorPosition = "left",
-                anchorOffsetX = 0,
-                anchorOffsetY = 0,
-                barVisibility = "always",
-                housingHideEnabled = true,
-                visHideHousing = true,
-                visOnlyInstances = false,
-                visHideMounted = false,
-                visHideNoTarget = false,
-                visHideNoEnemy = false,
-                hideBuffsWhenInactive = true,
-                showStackCount = false,
-                stackCountSize = 11,
-                stackCountX = 0,
-                stackCountY = 0,
-                stackCountR = 1, stackCountG = 1, stackCountB = 1,
-                showTooltip = false,
-                showKeybind = false,
-                keybindSize = 10,
-                keybindOffsetX = 2,
-                keybindOffsetY = -2,
-                keybindR = 1, keybindG = 1, keybindB = 1, keybindA = 0.9,
-                outOfRangeOverlay = false,
-            },
+            useBlizzardBuffBars = false,
             -- The 3 default bars (match Blizzard CDM)
             bars = {
                 {
                     key = "cooldowns", name = "Cooldowns", enabled = true,
-                    barScale = 1.0, iconSize = 42, numRows = 1, spacing = 2,
+                    iconSize = 42, numRows = 1, spacing = 2,
                     borderSize = 1, borderR = 0, borderG = 0, borderB = 0, borderA = 1,
                     borderClassColor = false,
                     bgR = 0.08, bgG = 0.08, bgB = 0.08, bgA = 0.6,
@@ -1073,7 +1057,7 @@ local DEFAULTS = {
                 },
                 {
                     key = "utility", name = "Utility", enabled = true,
-                    barScale = 1.0, iconSize = 36, numRows = 1, spacing = 2,
+                    iconSize = 36, numRows = 1, spacing = 2,
                     borderSize = 1, borderR = 0, borderG = 0, borderB = 0, borderA = 1,
                     borderClassColor = false,
                     bgR = 0.08, bgG = 0.08, bgB = 0.08, bgA = 0.6,
@@ -1101,7 +1085,7 @@ local DEFAULTS = {
                 },
                 {
                     key = "buffs", name = "Buffs", enabled = true,
-                    barScale = 1.0, iconSize = 32, numRows = 1, spacing = 2,
+                    iconSize = 32, numRows = 1, spacing = 2,
                     borderSize = 1, borderR = 0, borderG = 0, borderB = 0, borderA = 1,
                     borderClassColor = false,
                     bgR = 0.08, bgG = 0.08, bgB = 0.08, bgA = 0.6,
@@ -1126,6 +1110,8 @@ local DEFAULTS = {
                     keybindSize = 10, keybindOffsetX = 2, keybindOffsetY = -2,
                     keybindR = 1, keybindG = 1, keybindB = 1, keybindA = 0.9,
                     outOfRangeOverlay = false,
+                    pandemicGlow = true,
+                    pandemicR = 1, pandemicG = 1, pandemicB = 0,
                 },
             },
         },
@@ -1145,7 +1131,7 @@ local DEFAULTS = {
 local function GetCurrentSpecKey()
     local specIndex = GetSpecialization and GetSpecialization()
     if not specIndex then return "0" end
-    local specID = select(1, GetSpecializationInfo(specIndex))
+    local specID = select(1, C_SpecializationInfo.GetSpecializationInfo(specIndex))
     return tostring(specID or 0)
 end
 
@@ -1411,6 +1397,33 @@ local function BuildKnownSpellIDSet()
             end
         end
     end
+    -- Fallback: also check the full CDM category set (cat, true) which
+    -- includes ALL spells for the class regardless of talent selection.
+    -- Spells that exist in the full set AND pass IsPlayerSpell are known
+    -- even if the viewer hasn't updated yet after a talent swap.
+    local _IsPlayerSpell = IsPlayerSpell
+    if _IsPlayerSpell then
+        for cat = 0, 3 do
+            local allIDs = C_CooldownViewer.GetCooldownViewerCategorySet(cat, true)
+            if allIDs then
+                for _, cdID in ipairs(allIDs) do
+                    local info = C_CooldownViewer.GetCooldownViewerCooldownInfo(cdID)
+                    if info then
+                        local sid = ResolveInfoSpellID(info)
+                        if sid and sid > 0 and not known[sid] and _IsPlayerSpell(sid) then
+                            known[sid] = true
+                        end
+                        if info.spellID and info.spellID > 0 and not known[info.spellID] and _IsPlayerSpell(info.spellID) then
+                            known[info.spellID] = true
+                        end
+                        if info.overrideSpellID and info.overrideSpellID > 0 and not known[info.overrideSpellID] and _IsPlayerSpell(info.overrideSpellID) then
+                            known[info.overrideSpellID] = true
+                        end
+                    end
+                end
+            end
+        end
+    end
     return known
 end
 
@@ -1554,7 +1567,6 @@ local function LoadSpecProfile(specKey)
             enabled = true,
             selectedBar = 1,
             selectedButton = nil,
-            selectedAssignment = 1,
             assignments = {},
         }
 
@@ -1619,7 +1631,7 @@ local function SwitchSpecProfile(newSpecKey)
                 EllesmereUI:InvalidateContentHeaderCache()
             end
             if EllesmereUI.RefreshPage then
-                EllesmereUI:RefreshPage()
+                EllesmereUI:RefreshPage(true)
             end
         end
     end)
@@ -1638,6 +1650,7 @@ ns.CDM_BAR_ROOTS = {
 --  Action Button Lookup (supports Blizzard and popular bar addons)
 -------------------------------------------------------------------------------
 local blizzBarNames = {
+    [1] = "ActionButton",
     [2] = "MultiBarBottomLeftButton",
     [3] = "MultiBarBottomRightButton",
     [4] = "MultiBarRightButton",
@@ -1647,32 +1660,23 @@ local blizzBarNames = {
     [8] = "MultiBar7Button",
 }
 
-local actionButtonCache = {}
+-- EAB slot offsets match BAR_SLOT_OFFSETS in EllesmereUIActionBars.lua
+local eabSlotOffsets = { 0, 60, 48, 24, 36, 144, 156, 168 }
 
-local function FirstExisting(...)
-    for i = 1, select("#", ...) do
-        local f = _G[select(i, ...)]
-        if f then return f end
-    end
-end
+local actionButtonCache = {}
 
 local function GetActionButton(bar, i)
     bar = bar or 1
     local cacheKey = bar * 100 + i
     if actionButtonCache[cacheKey] then return actionButtonCache[cacheKey] end
-    local btn
-    if bar == 1 then
-        btn = FirstExisting(
-            "BT4Button" .. i, "ElvUI_Bar1Button" .. i,
-            "DominosActionButton" .. i, "ActionButton" .. i)
-    else
-        local offset = (bar - 1) * 12
-        local blizz = blizzBarNames[bar]
-        btn = FirstExisting(
-            "BT4Button" .. (offset + i),
-            "ElvUI_Bar" .. bar .. "Button" .. i,
-            "DominosActionButton" .. (offset + i),
-            blizz and (blizz .. i) or nil)
+    -- Try EABButton first (EllesmereUIActionBars creates these when Blizzard
+    -- buttons are unavailable, e.g. when Dominos hides ActionButton1-12)
+    local eabSlot = (eabSlotOffsets[bar] or 0) + i
+    local btn = _G["EABButton" .. eabSlot]
+    -- Fall back to standard Blizzard button names
+    if not btn then
+        local prefix = blizzBarNames[bar]
+        btn = prefix and _G[prefix .. i]
     end
     if btn then actionButtonCache[cacheKey] = btn end
     return btn
@@ -1844,34 +1848,9 @@ local CDM_ROOT_NAMES = {
     "EssentialCooldownViewer", "UtilityCooldownViewer",
 }
 
-local function UpdateUtilityScale()
-    local utility = _G.UtilityCooldownViewer
-    if utility and ECME.db then
-        utility:SetScale(ECME.db.profile.utilityScale or 1.0)
-    end
-end
-
-local function UpdateBuffBarScale()
-    local buffBar = _G.BuffIconCooldownViewer
-    if buffBar and ECME.db then
-        buffBar:SetScale(ECME.db.profile.buffBarScale or 1.0)
-    end
-end
-
-local function UpdateCooldownBarScale()
-    local cdBar = _G.EssentialCooldownViewer
-    if cdBar and ECME.db then
-        cdBar:SetScale(ECME.db.profile.cooldownBarScale or 1.0)
-    end
-end
-
 local function UpdateAllCDMBorders()
     local reskin = ECME.db and ECME.db.profile.reskinBorders
     local crop = 0.06
-
-    UpdateUtilityScale()
-    UpdateBuffBarScale()
-    UpdateCooldownBarScale()
 
     for _, rootName in ipairs(CDM_ROOT_NAMES) do
         local root = _G[rootName]
@@ -1911,13 +1890,13 @@ ns.UpdateAllCDMBorders = UpdateAllCDMBorders
 local _G_Glows = EllesmereUI.Glows
 local GLOW_STYLES = {
     { name = "Pixel Glow",           procedural = true },
-    { name = "Custom Shape Glow",    shapeGlow = true, scale = 1.20 },
-    { name = "Action Button Glow",   buttonGlow = true, scale = 1.16 },
+    { name = "Custom Shape Glow",    shapeGlow = true },
+    { name = "Action Button Glow",   buttonGlow = true },
     { name = "Auto-Cast Shine",      autocast = true },
-    { name = "GCD",                  atlas = "RotationHelper_Ants_Flipbook",  scale = 1.41 },
-    { name = "Modern WoW Glow",      atlas = "UI-HUD-ActionBar-Proc-Loop-Flipbook",  scale = 1.53 },
+    { name = "GCD",                  atlas = "RotationHelper_Ants_Flipbook", texPadding = 1.6 },
+    { name = "Modern WoW Glow",      atlas = "UI-HUD-ActionBar-Proc-Loop-Flipbook", texPadding = 1.4 },
     { name = "Classic WoW Glow",     texture = "Interface\\SpellActivationOverlay\\IconAlertAnts",
-      rows = 5, columns = 5, frames = 25, duration = 0.3, frameW = 48, frameH = 48, scale = 1.03 },
+      rows = 5, columns = 5, frames = 25, duration = 0.3, frameW = 48, frameH = 48, texPadding = 1.25 },
 }
 ns.GLOW_STYLES = GLOW_STYLES
 
@@ -1942,7 +1921,7 @@ StartNativeGlow = function(overlay, style, cr, cg, cb)
         local shape = icon._shapeApplied and icon._shapeName or nil
         local maskPath   = shape and CDM_SHAPES.masks[shape]
         local borderPath = shape and CDM_SHAPES.borders[shape]
-        _G_Glows.StartShapeGlow(overlay, sz, cr, cg, cb, entry.scale or 1.20, {
+        _G_Glows.StartShapeGlow(overlay, sz, cr, cg, cb, 1.20, {
             maskPath   = maskPath,
             borderPath = borderPath,
             shapeMask  = icon._shapeMask,
@@ -1954,7 +1933,7 @@ StartNativeGlow = function(overlay, style, cr, cg, cb)
         if lineLen < 1 then lineLen = 1 end
         _G_Glows.StartProceduralAnts(overlay, N, th, period, lineLen, cr, cg, cb, sz)
     elseif entry.buttonGlow then
-        _G_Glows.StartButtonGlow(overlay, sz, cr, cg, cb, entry.scale or 1.16)
+        _G_Glows.StartButtonGlow(overlay, sz, cr, cg, cb)
     elseif entry.autocast then
         _G_Glows.StartAutoCastShine(overlay, sz, cr, cg, cb, 1.0)
     else
@@ -2384,11 +2363,9 @@ CaptureCDMPositions = function()
         if frame then
             local data = {}
 
-            -- Bar scale from the frame's drag-handle scale
+            -- Read the frame's scale (used to adjust icon size capture)
             local frameScale = frame:GetScale()
-            if frameScale and frameScale > 0.1 then
-                data.barScale = frameScale
-            end
+            if not frameScale or frameScale < 0.1 then frameScale = 1 end
 
             -- Icon size + spacing: read from child icons.
             -- Blizzard CDM icons have a base size and a per-icon scale driven
@@ -2515,7 +2492,7 @@ HideBlizzardCDM = function()
                 -- The hook fires after the original call, so we re-apply our
                 -- off-screen position and zero alpha on top of whatever Blizzard set.
                 hooksecurefunc(frame, "SetPoint", function(self)
-                    if self._ecmeHidden and not self._ecmeRestoring and not self._ecmeSuppressing then
+                    if self._ecmeHidden and not self._ecmeRestoring and not self._ecmeSuppressing and not InCombatLockdown() then
                         self._ecmeSuppressing = true
                         self:ClearAllPoints()
                         self:SetPoint("CENTER", UIParent, "CENTER", 0, 10000)
@@ -2531,8 +2508,10 @@ HideBlizzardCDM = function()
                 end)
             end
             frame:SetAlpha(0)
-            frame:ClearAllPoints()
-            frame:SetPoint("CENTER", UIParent, "CENTER", 0, 10000)
+            if not InCombatLockdown() then
+                frame:ClearAllPoints()
+                frame:SetPoint("CENTER", UIParent, "CENTER", 0, 10000)
+            end
         end
     end
 end
@@ -2558,28 +2537,32 @@ RestoreBlizzardCDM = function()
     end
 end
 
+-- Restore only the Blizzard buff CDM frame (BuffIconCooldownViewer).
+local function RestoreBlizzardBuffFrame()
+    local frameName = BLIZZ_CDM_FRAMES.buffs
+    if not frameName then return end
+    local frame = _G[frameName]
+    if frame and frame._ecmeHidden then
+        frame._ecmeRestoring = true
+        frame:SetAlpha(frame._ecmeOrigAlpha or 1)
+        if frame._ecmeOrigPoints then
+            frame:ClearAllPoints()
+            for _, pt in ipairs(frame._ecmeOrigPoints) do
+                frame:SetPoint(pt[1], pt[2], pt[3], pt[4], pt[5])
+            end
+        end
+        frame._ecmeHidden = false
+        frame._ecmeRestoring = nil
+    end
+end
+
 -------------------------------------------------------------------------------
 --  CDM Bar Position Helpers
 -------------------------------------------------------------------------------
 local function ApplyBarPositionCentered(frame, pos, w, h, scale)
     if not pos or not pos.point then return end
     frame:ClearAllPoints()
-    -- Convert legacy TOPLEFT positions to CENTER so the bar stays centered
-    -- when icon count changes across specs.
-    if pos.point == "TOPLEFT" and pos.relPoint == "TOPLEFT" then
-        local fw, fh = frame:GetWidth() or 0, frame:GetHeight() or 0
-        local uiW, uiH = UIParent:GetSize()
-        local cx = (pos.x or 0) + fw * 0.5 - uiW * 0.5
-        local cy = (pos.y or 0) - fh * 0.5 + uiH * 0.5
-        frame:SetPoint("CENTER", UIParent, "CENTER", cx, cy)
-        -- Migrate the saved position to CENTER for future loads
-        pos.point = "CENTER"
-        pos.relPoint = "CENTER"
-        pos.x = cx
-        pos.y = cy
-    else
-        frame:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 0)
-    end
+    frame:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 0)
 end
 
 local function SaveCDMBarPosition(barKey, frame)
@@ -2676,10 +2659,8 @@ BuildCDMBar = function(barIndex)
         return
     end
 
-    -- Apply scale
-    local scale = barData.barScale or 1.0
-    if scale < 0.1 then scale = 1.0 end
-    frame:SetScale(scale)
+    -- Scale removed -- all sizing is width/height based now
+    frame:SetScale(1)
 
     -- Clear any previous mouse-tracking OnUpdate
     if frame._mouseTrack then
@@ -2739,6 +2720,14 @@ BuildCDMBar = function(barIndex)
         frame:SetPoint(pointFrom, UIParent, "BOTTOMLEFT", 0, 0)
         frame._mouseTrack = true
         frame:SetScript("OnUpdate", function()
+            -- Hide cursor-anchored bar while EUI options panel or unlock mode is open
+            if (EllesmereUI._mainFrame and EllesmereUI._mainFrame:IsShown())
+               or EllesmereUI._unlockActive then
+                if frame:GetAlpha() > 0 then frame:SetAlpha(0) end
+                return
+            elseif frame:GetAlpha() == 0 then
+                frame:SetAlpha(barData.barBgAlpha or 1)
+            end
             local s = UIParent:GetEffectiveScale()
             local cx, cy = GetCursorPosition()
             cx = floor(cx / s + 0.5)
@@ -2901,6 +2890,21 @@ BuildCDMBar = function(barIndex)
     frame:Show()
 end
 
+-- Compute stride respecting topRowCount override (only for numRows == 2)
+local function ComputeTopRowStride(barData, count)
+    local numRows = barData.numRows or 1
+    if numRows < 1 then numRows = 1 end
+    if numRows == 2 and barData.topRowCount and barData.topRowCount > 0 then
+        local topCount = math.min(barData.topRowCount, count)
+        local bottomCount = count - topCount
+        return math.max(topCount, bottomCount), numRows, topCount
+    end
+    local stride = math.ceil(count / numRows)
+    local topCount = count - (numRows - 1) * stride
+    if topCount < 0 then topCount = 0 end
+    return stride, numRows, topCount
+end
+
 -------------------------------------------------------------------------------
 --  Layout icons within a CDM bar
 -------------------------------------------------------------------------------
@@ -2912,15 +2916,13 @@ LayoutCDMBar = function(barKey)
     local barData = barDataByKey[barKey]
     if not barData or not barData.enabled then return end
 
-    local barScale = barData.barScale or 1.0
-    if barScale < 0.1 then barScale = 1.0 end
-    local iconW = SnapForScale(barData.iconSize or 36, barScale)
+    local iconW = SnapForScale(barData.iconSize or 36, 1)
     local iconH = iconW
     local shape = barData.iconShape or "none"
     if shape == "cropped" then
-        iconH = SnapForScale(math.floor((barData.iconSize or 36) * 0.80 + 0.5), barScale)
+        iconH = SnapForScale(math.floor((barData.iconSize or 36) * 0.80 + 0.5), 1)
     end
-    local spacing = SnapForScale(barData.spacing or 2, barScale)
+    local spacing = SnapForScale(barData.spacing or 2, 1)
     local grow = frame._mouseGrow or barData.growDirection or "RIGHT"
     local numRows = barData.numRows or 1
     if numRows < 1 then numRows = 1 end
@@ -2942,7 +2944,7 @@ LayoutCDMBar = function(barKey)
     end
 
     local isHoriz = (grow == "RIGHT" or grow == "LEFT")
-    local stride = math.ceil(count / numRows)
+    local stride, _, customTopCount = ComputeTopRowStride(barData, count)
 
     -- Container size (already snapped values)
     local totalW, totalH
@@ -2953,13 +2955,37 @@ LayoutCDMBar = function(barKey)
         totalW = numRows * iconW + (numRows - 1) * spacing
         totalH = stride * iconH + (stride - 1) * spacing
     end
-    frame:SetSize(SnapForScale(totalW, barScale), SnapForScale(totalH, barScale))
+    frame:SetSize(SnapForScale(totalW, 1), SnapForScale(totalH, 1))
+
+    -- During unlock mode, skip anchor/propagation -- unlock mode owns positioning.
+    if not EllesmereUI._unlockActive then
+        -- Immediately reposition this bar if it's anchored to something,
+        -- before the frame renders, to avoid a one-frame blink.
+        if EllesmereUI.ReapplyOwnAnchor then
+            EllesmereUI.ReapplyOwnAnchor("CDM_" .. barKey)
+        end
+
+        if not frame._propagatingMatch then
+            frame._propagatingMatch = true
+            local unlockKey = "CDM_" .. barKey
+            if EllesmereUI.PropagateWidthMatch then
+                EllesmereUI.PropagateWidthMatch(unlockKey)
+            end
+            if EllesmereUI.PropagateHeightMatch then
+                EllesmereUI.PropagateHeightMatch(unlockKey)
+            end
+            if EllesmereUI.PropagateAnchorChain then
+                EllesmereUI.PropagateAnchorChain(unlockKey)
+            end
+            frame._propagatingMatch = false
+        end
+    end
 
     -- Bar opacity (affects entire bar, but respect visibility overrides)
     local vis = barData.barVisibility or "always"
     if _cdmInVehicle or EllesmereUI.CheckVisibilityOptions(barData) then
         -- Vehicle or visibility options say hide -- don't override
-    elseif vis == "always" or (vis == "in_combat" and _inCombat) then
+    elseif vis == "always" or (vis == "in_combat" and _inCombat) or (vis == "out_of_combat" and not _inCombat) then
         frame:SetAlpha(barData.barBgAlpha or 1)
     elseif vis == "mouseover" then
         local state = _cdmHoverStates[barKey]
@@ -2985,8 +3011,8 @@ LayoutCDMBar = function(barKey)
     local stepW = iconW + spacing
     local stepH = iconH + spacing
 
-    -- How many icons on the top row (remainder goes top, full rows on bottom)
-    local topRowCount = count - (numRows - 1) * stride
+    -- How many icons on the top row
+    local topRowCount = customTopCount
     if topRowCount < 0 then topRowCount = 0 end
     local topRowHasLess = (topRowCount > 0 and topRowCount < stride)
 
@@ -2994,12 +3020,6 @@ LayoutCDMBar = function(barKey)
     -- top row gets the remainder. Centering only on top row when partial.
     for i, icon in ipairs(visibleIcons) do
         icon:SetSize(iconW, iconH)
-        if icon._glowOverlay then
-            -- Keep glow overlay square (based on full icon width) so glow
-            -- engines render correctly even when the icon is cropped.
-            local glowSz = iconW + SnapForScale(6, barScale)
-            icon._glowOverlay:SetSize(glowSz, glowSz)
-        end
         icon:ClearAllPoints()
 
         -- Map sequential index to bottom-up grid position.
@@ -3019,7 +3039,7 @@ LayoutCDMBar = function(barKey)
         if grow == "RIGHT" then
             local rowOffset = 0
             if row == 0 and topRowHasLess then
-                rowOffset = SnapForScale((stride - topRowCount) * stepW / 2, barScale)
+                rowOffset = SnapForScale((stride - topRowCount) * stepW / 2, 1)
             end
             icon:SetPoint("TOPLEFT", frame, "TOPLEFT",
                 col * stepW + rowOffset,
@@ -3027,7 +3047,7 @@ LayoutCDMBar = function(barKey)
         elseif grow == "LEFT" then
             local rowOffset = 0
             if row == 0 and topRowHasLess then
-                rowOffset = SnapForScale((stride - topRowCount) * stepW / 2, barScale)
+                rowOffset = SnapForScale((stride - topRowCount) * stepW / 2, 1)
             end
             icon:SetPoint("TOPRIGHT", frame, "TOPRIGHT",
                 -(col * stepW + rowOffset),
@@ -3035,7 +3055,7 @@ LayoutCDMBar = function(barKey)
         elseif grow == "DOWN" then
             local rowOffset = 0
             if row == 0 and topRowHasLess then
-                rowOffset = SnapForScale((stride - topRowCount) * stepH / 2, barScale)
+                rowOffset = SnapForScale((stride - topRowCount) * stepH / 2, 1)
             end
             icon:SetPoint("TOPLEFT", frame, "TOPLEFT",
                 row * stepW,
@@ -3043,7 +3063,7 @@ LayoutCDMBar = function(barKey)
         elseif grow == "UP" then
             local rowOffset = 0
             if row == 0 and topRowHasLess then
-                rowOffset = SnapForScale((stride - topRowCount) * stepH / 2, barScale)
+                rowOffset = SnapForScale((stride - topRowCount) * stepH / 2, 1)
             end
             icon:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT",
                 row * stepW,
@@ -3062,14 +3082,12 @@ local function CreateCDMIcon(barKey, index)
     local barData = barDataByKey[barKey]
     if not barData then return end
 
-    local barScale = barData.barScale or 1.0
-    if barScale < 0.1 then barScale = 1.0 end
     local iconSize = barData.iconSize or 36
     local borderSize = barData.borderSize or 1
     local zoom = barData.iconZoom or 0.08
 
     local icon = CreateFrame("Frame", "ECME_CDMIcon_" .. barKey .. "_" .. index, frame)
-    icon:SetSize(SnapForScale(iconSize, barScale), SnapForScale(iconSize, barScale))
+    icon:SetSize(SnapForScale(iconSize, 1), SnapForScale(iconSize, 1))
     icon:EnableMouse(false)  -- click-through by default
     if icon.EnableMouseMotion then icon:EnableMouseMotion(false) end
 
@@ -3108,8 +3126,7 @@ local function CreateCDMIcon(barKey, index)
 
     -- Glow overlay: above cooldown swipe, below text so numbers stay readable
     local glowOverlay = CreateFrame("Frame", nil, icon)
-    glowOverlay:SetPoint("CENTER", icon, "CENTER")
-    glowOverlay:SetSize(1, 1)  -- sized properly during layout
+    glowOverlay:SetAllPoints(icon)
     glowOverlay:SetFrameLevel(icon:GetFrameLevel() + 2)
     glowOverlay:SetAlpha(0)
     glowOverlay:EnableMouse(false)
@@ -3174,11 +3191,75 @@ local function CreateCDMIcon(barKey, index)
 end
 
 -------------------------------------------------------------------------------
+--  Lazily create or update the red "untracked" overlay on a CDM icon.
+--  Shows a 60% red tint and, when the options panel is open, a clickable
+--  button that opens the Blizzard CDM settings.
+-------------------------------------------------------------------------------
+-- Styled tooltip for untracked overlay (self-contained, no widget dependency)
+local _untrackedTooltip
+local function ShowUntrackedTooltip(anchor, text)
+    if not _untrackedTooltip then
+        local tt = CreateFrame("Frame", nil, UIParent)
+        tt:SetFrameStrata("TOOLTIP")
+        tt:SetSize(250, 40)
+        local bg = tt:CreateTexture(nil, "BACKGROUND")
+        bg:SetAllPoints()
+        bg:SetColorTexture(0.067, 0.067, 0.067, 0.90)
+        local PP2 = EllesmereUI and EllesmereUI.PP
+        if PP2 then PP2.CreateBorder(tt, 1, 1, 1, 0.15, 1) end
+        local fs = tt:CreateFontString(nil, "OVERLAY")
+        fs:SetFont(GetCDMFont(), 11, "")
+        fs:SetShadowOffset(1, -1)
+        fs:SetTextColor(1, 1, 1, 0.80)
+        fs:SetPoint("TOPLEFT", 8, -8)
+        fs:SetPoint("TOPRIGHT", -8, -8)
+        fs:SetWordWrap(true)
+        fs:SetSpacing(3)
+        tt.text = fs
+        tt:Hide()
+        _untrackedTooltip = tt
+    end
+    local tt = _untrackedTooltip
+    tt:SetWidth(250)
+    tt.text:SetText(text)
+    tt:ClearAllPoints()
+    tt:SetPoint("BOTTOM", anchor, "TOP", 0, 4)
+    tt:SetAlpha(0)
+    tt:Show()
+    local naturalW = tt.text:GetStringWidth() + 16
+    tt:SetWidth(math.min(naturalW, 250))
+    tt:SetHeight(tt.text:GetStringHeight() + 16)
+    tt:SetAlpha(1)
+end
+local function HideUntrackedTooltip()
+    if _untrackedTooltip then _untrackedTooltip:Hide() end
+end
+
+local function ApplyUntrackedOverlay(ourIcon, spellID, isUntracked)
+    -- DISABLED: click-to-track feature temporarily disabled
+    -- if isUntracked then
+    --     ...
+    -- end
+    if ourIcon._untrackedOverlay then
+        ourIcon._untrackedOverlay:Hide()
+        ourIcon._isUntracked = false
+    end
+end
+
+-------------------------------------------------------------------------------
 --  Toggle tooltip OnUpdate for all icons on a bar.
 --  When enabled, each icon polls IsMouseOver every frame.
 --  When disabled, the OnUpdate is nil -- zero performance cost.
 -------------------------------------------------------------------------------
 local _cdmTooltipOnUpdate = function(self)
+    -- Suppress tooltips while in edit / unlock mode
+    if EllesmereUI and EllesmereUI._unlockActive then
+        if self._tooltipShown then
+            GameTooltip:Hide()
+            self._tooltipShown = false
+        end
+        return
+    end
     local over = self:IsMouseOver()
     if over and not self._tooltipShown then
         local sid = self._spellID
@@ -3696,12 +3777,16 @@ local function UpdateCustomBarIcons(barKey)
                      or _tickBlizzAllChildCache[resolvedID] or _tickBlizzAllChildCache[spellID])
                 or nil
             local blizzBuffChildCTexSet = false
-            if blizzBuffChildC and not overrideTex and blizzBuffChildC.Icon and blizzBuffChildC.Icon.GetTexture then
-                local childTexC = blizzBuffChildC.Icon:GetTexture()
-                if childTexC then
-                    ourIcon._tex:SetTexture(childTexC)
-                    ourIcon._lastTex = 0
-                    blizzBuffChildCTexSet = true
+            if blizzBuffChildC and not overrideTex and blizzBuffChildC.Icon then
+                local iwC = blizzBuffChildC.Icon
+                if not iwC.GetTexture and iwC.Icon then iwC = iwC.Icon end
+                if iwC.GetTexture then
+                    local childTexC = iwC:GetTexture()
+                    if childTexC then
+                        ourIcon._tex:SetTexture(childTexC)
+                        ourIcon._lastTex = 0
+                        blizzBuffChildCTexSet = true
+                    end
                 end
             end
             local effectiveTex = overrideTex or texID
@@ -3790,7 +3875,16 @@ local function UpdateCustomBarIcons(barKey)
                             auraHandled = false
                         else
                             local isChargeSid = _multiChargeSpells[resolvedID] == true
-                            if auraID and (not isChargeSid or isBuffBarForOverride) then
+                            -- Charge spells: prefer recharge timer unless the
+                            -- buff-viewer is actively tracking this spell.
+                            local chargeShowsAura = not isChargeSid or isBuffBarForOverride
+                            if isChargeSid and not isBuffBarForOverride then
+                                local bufCh = _tickBlizzBuffChildCache[resolvedID] or _tickBlizzBuffChildCache[spellID]
+                                if IsBufChildCooldownActive(bufCh) then
+                                    chargeShowsAura = true
+                                end
+                            end
+                            if auraID and chargeShowsAura then
                                 local ok, auraDurObj = pcall(C_UnitAuras.GetAuraDuration, auraUnit, auraID)
                                 if ok and auraDurObj then
                                     ourIcon._cooldown:Clear()
@@ -3932,6 +4026,16 @@ local function UpdateCustomBarIcons(barKey)
 
                 ApplyActiveAnimation(ourIcon, auraHandled, barData, barKey, activeAnim, animR, animG, animB, swAlpha)
 
+                -- Pandemic glow (buff bars only)
+                if isBuffBarForOverride then
+                    ApplyPandemicGlow(ourIcon, ourIcon._blizzChild, barData)
+                elseif ourIcon._pandemicGlowActive then
+                    if not ourIcon._procGlowActive and not ourIcon._isActive then
+                        StopNativeGlow(ourIcon._glowOverlay)
+                    end
+                    ourIcon._pandemicGlowActive = false
+                end
+
                 -- Out-of-range overlay (skip buff bars -- buffs don't target enemies)
                 if not isBuffBarForOverride then
                     ApplyRangeOverlay(ourIcon, resolvedID, barData.outOfRangeOverlay)
@@ -3942,6 +4046,15 @@ local function UpdateCustomBarIcons(barKey)
 
                 ourIcon:Show()
                 visibleCount = visibleCount + 1
+
+                -- Untracked overlay for custom bars
+                -- Only applies to spells in the CDM category system (have a cdID).
+                local isUntrackedC = _spellToCooldownID[spellID]
+                    and not _tickBlizzAllChildCache[resolvedID]
+                    and not _tickBlizzAllChildCache[spellID]
+                    and not _tickBlizzChildCache[resolvedID]
+                    and not _tickBlizzChildCache[spellID]
+                ApplyUntrackedOverlay(ourIcon, spellID, isUntrackedC)
 
                 -- Hide buff icons when inactive (aura not active on player) — buff bars only
                 -- Skip during unlock mode so the bar is fully visible for repositioning
@@ -3977,6 +4090,8 @@ local function UpdateCustomBarIcons(barKey)
                 end
             else
                 ourIcon:Hide()
+                if ourIcon._untrackedOverlay then ourIcon._untrackedOverlay:Hide() end
+                ourIcon._isUntracked = false
             end
             end -- healthItem else
             end -- spellID < 0 else
@@ -3986,10 +4101,13 @@ local function UpdateCustomBarIcons(barKey)
     -- Hide excess
     for i = #spells + 1, #icons do
         local ic = icons[i]
+        if ic._untrackedOverlay then ic._untrackedOverlay:Hide() end
+        ic._isUntracked = false
         if ic._procGlowActive then
             StopNativeGlow(ic._glowOverlay)
             ic._procGlowActive = false
         end
+        ic._pandemicGlowActive = false
         ic:Hide()
     end
 
@@ -4016,17 +4134,30 @@ UpdateCDMBarIcons = function(barKey)
     -- We do NOT filter by IsShown() because Blizzard children can briefly
     -- hide/show during state transitions (GCD end, cooldown start, etc.),
     -- which causes our icons to flicker.  Instead we check for a texture.
+    -- BuffIcon children have Icon as a Texture (with GetTexture).
+    -- BuffBar children wrap it: Icon is a Frame, Icon.Icon is the Texture.
+    -- Guard both paths to avoid "GetTexture is nil" errors on BuffBar children.
     -- Reuse buffer to avoid table allocation per tick
     local blizzIcons = _blizzIconsBuf
     local blizzCount = 0
+    -- Dedup by resolved spellID across primary + secondary viewers so that
+    -- spells appearing in both (e.g. Remorseless Winter) only show once.
+    -- Primary viewer children are collected first and win on conflict.
+    local _blizzIconSeen = {}
 
     do
         local children = { blizzFrame:GetChildren() }
         for i = 1, #children do
             local child = children[i]
-            if child and child.Icon and child.Icon:GetTexture() then
-                blizzCount = blizzCount + 1
-                blizzIcons[blizzCount] = child
+            if child and child.Icon then
+                local iw = child.Icon
+                if not iw.GetTexture and iw.Icon then iw = iw.Icon end
+                if iw.GetTexture and iw:GetTexture() then
+                    local sid = child._ecmeResolvedSid
+                    if sid and sid > 0 then _blizzIconSeen[sid] = true end
+                    blizzCount = blizzCount + 1
+                    blizzIcons[blizzCount] = child
+                end
             end
         end
     end
@@ -4039,9 +4170,17 @@ UpdateCDMBarIcons = function(barKey)
             local children = { secondaryFrame:GetChildren() }
             for i = 1, #children do
                 local child = children[i]
-                if child and child.Icon and child.Icon:GetTexture() then
-                    blizzCount = blizzCount + 1
-                    blizzIcons[blizzCount] = child
+                if child and child.Icon then
+                    local iw = child.Icon
+                    if not iw.GetTexture and iw.Icon then iw = iw.Icon end
+                    if iw.GetTexture and iw:GetTexture() then
+                        local sid = child._ecmeResolvedSid
+                        if not sid or sid <= 0 or not _blizzIconSeen[sid] then
+                            if sid and sid > 0 then _blizzIconSeen[sid] = true end
+                            blizzCount = blizzCount + 1
+                            blizzIcons[blizzCount] = child
+                        end
+                    end
                 end
             end
         end
@@ -4079,7 +4218,7 @@ UpdateCDMBarIcons = function(barKey)
     -- Update each icon to mirror the Blizzard CDM icon
     for i, blizzIcon in ipairs(blizzIcons) do
         local ourIcon = icons[i]
-        if ourIcon then
+        if ourIcon and ourIcon._tex then
             -- Store mapping so proc glow hooks can find our icon from the Blizzard child
             ourIcon._blizzChild = blizzIcon
 
@@ -4147,11 +4286,19 @@ UpdateCDMBarIcons = function(barKey)
             local skipCDDisplay = false
 
             if isAura and activeAnim ~= "hideActive" then
-                local isChargeSid = resolvedSid and _multiChargeSpells[resolvedSid] == true
-                -- Buff bars always show buff duration; other bars skip aura duration for charge spells
                 local isBuffBar = (barKey == "buffs")
+                local isChargeSid = resolvedSid and _multiChargeSpells[resolvedSid] == true
+                -- Charge spells: prefer recharge timer unless the
+                -- buff-viewer is actively tracking this spell.
+                local chargeShowsAura = not isChargeSid or isBuffBar
+                if isChargeSid and not isBuffBar then
+                    local bufCh = _tickBlizzBuffChildCache[resolvedSid] or (spellID and _tickBlizzBuffChildCache[spellID])
+                    if IsBufChildCooldownActive(bufCh) then
+                        chargeShowsAura = true
+                    end
+                end
                 local auraID = blizzIcon.auraInstanceID
-                if auraID and (not isChargeSid or isBuffBar) then
+                if auraID and chargeShowsAura then
                     -- Show buff duration on the cooldown frame
                     local unit = blizzIcon.auraDataUnit or "player"
                     local ok, auraDurObj = pcall(C_UnitAuras.GetAuraDuration, unit, auraID)
@@ -4184,7 +4331,6 @@ UpdateCDMBarIcons = function(barKey)
                         end
                     end
                 else
-                    -- Charge spell on non-buff bar: mark active for glow, show charge CD
                     auraHandled = true
                 end
             end
@@ -4261,6 +4407,16 @@ UpdateCDMBarIcons = function(barKey)
             -- Active state animation (consolidated)
             ApplyActiveAnimation(ourIcon, auraHandled, barData, barKey, activeAnim, animR, animG, animB, swAlpha)
 
+            -- Pandemic glow (buff bars only)
+            if isBuffBar then
+                ApplyPandemicGlow(ourIcon, blizzIcon, barData)
+            elseif ourIcon._pandemicGlowActive then
+                if not ourIcon._procGlowActive and not ourIcon._isActive then
+                    StopNativeGlow(ourIcon._glowOverlay)
+                end
+                ourIcon._pandemicGlowActive = false
+            end
+
             -- Out-of-range overlay (skip buff bars)
             if not isBuffBar then
                 ApplyRangeOverlay(ourIcon, resolvedSid, barData.outOfRangeOverlay)
@@ -4301,6 +4457,7 @@ UpdateCDMBarIcons = function(barKey)
             StopNativeGlow(ic._glowOverlay)
             ic._procGlowActive = false
         end
+        ic._pandemicGlowActive = false
         if ic:IsShown() then
             if not ic._hideGraceStart then
                 ic._hideGraceStart = GetTime()
@@ -4331,7 +4488,6 @@ end
 --  CDM Bar Update Tick (mirrors Blizzard CDM state to our bars)
 -------------------------------------------------------------------------------
 local cdmUpdateThrottle = 0
-local CDM_UPDATE_INTERVAL = 0.1  -- 10fps
 
 -- Refresh visual properties of existing icons (called when settings change)
 local function RefreshCDMIconAppearance(barKey)
@@ -4341,8 +4497,6 @@ local function RefreshCDMIconAppearance(barKey)
     local barData = barDataByKey[barKey]
     if not barData then return end
 
-    local barScale = barData.barScale or 1.0
-    if barScale < 0.1 then barScale = 1.0 end
     local borderSize = barData.borderSize or 1
     local zoom = barData.iconZoom or 0.08
 
@@ -4479,11 +4633,13 @@ local function SnapshotBlizzardCDM(barKey, barData)
     local filterPassives = (barKey ~= "buffs")
 
     local tracked = {}
+    local trackedSeen = {}  -- dedup by spellID across primary + secondary viewers
     for _, child in ipairs(blizzIcons) do
         local sid = ResolveChildSpellID(child)
-        if sid and sid > 0 then
+        if sid and sid > 0 and not trackedSeen[sid] then
             local skip = filterPassives and IsTrulyPassive(sid)
             if not skip then
+                trackedSeen[sid] = true
                 tracked[#tracked + 1] = sid
                 -- Store spellID -> cdID mapping for buff bars so the tick cache
                 -- can find the correct viewer child even when the cooldownInfo
@@ -4541,7 +4697,20 @@ local function UpdateTrackedBarIcons(barKey)
     if not barData or not barData.enabled then return end
 
     local tracked = barData.trackedSpells
-    if not tracked or #tracked == 0 then return end
+    local hasTracked = tracked and #tracked > 0
+    local hasExtras = barData.extraSpells and #barData.extraSpells > 0
+    if not hasTracked and not hasExtras then
+        -- Hide all leftover icons and collapse the bar
+        local icons2 = cdmBarIcons[barKey]
+        if icons2 then
+            for _, ic in ipairs(icons2) do ic:Hide() end
+        end
+        frame:SetSize(1, 1)
+        frame._prevVisibleCount = 0
+        if frame._barBg then frame._barBg:Hide() end
+        return
+    end
+    if not tracked then tracked = {} end
 
     local icons = cdmBarIcons[barKey]
     local desatOnCD = barData.desaturateOnCD
@@ -4607,12 +4776,19 @@ local function UpdateTrackedBarIcons(barKey)
     local companionChild = hasCompanions and _activeMultiScratch or nil
     local extras = barData.extraSpells
     if extras then
+        -- Dedup: skip extras already present in trackedSpells (avoids duplicate icons
+        -- when the same spellID appears in both lists after spec switch or reconcile).
+        wipe(_combinedSeen)
+        for ci = 1, combinedN do _combinedSeen[combined[ci]] = true end
         for _, sid in ipairs(extras) do
-            combinedN = combinedN + 1
+            local resolved = sid
             if ALL_RACIAL_SPELLS[sid] and not _myRacialsSet[sid] and _myRacials[1] then
-                combined[combinedN] = _myRacials[1]
-            else
-                combined[combinedN] = sid
+                resolved = _myRacials[1]
+            end
+            if not _combinedSeen[resolved] then
+                combinedN = combinedN + 1
+                combined[combinedN] = resolved
+                _combinedSeen[resolved] = true
             end
         end
     end
@@ -4939,7 +5115,16 @@ local function UpdateTrackedBarIcons(barKey)
                             auraHandled = false
                         else
                             local isChargeSid = _multiChargeSpells[resolvedID] == true
-                            if auraID and (not isChargeSid or isBuffBarForOvr) then
+                            -- Charge spells: prefer recharge timer unless the
+                            -- buff-viewer is actively tracking this spell.
+                            local chargeShowsAura = not isChargeSid or isBuffBarForOvr
+                            if isChargeSid and not isBuffBarForOvr then
+                                local bufCh = _tickBlizzBuffChildCache[resolvedID] or _tickBlizzBuffChildCache[spellID]
+                                if IsBufChildCooldownActive(bufCh) then
+                                    chargeShowsAura = true
+                                end
+                            end
+                            if auraID and chargeShowsAura then
                                 local ok, auraDurObj = pcall(C_UnitAuras.GetAuraDuration, auraUnit, auraID)
                                 if ok and auraDurObj then
                                     ourIcon._cooldown:Clear()
@@ -5007,6 +5192,8 @@ local function UpdateTrackedBarIcons(barKey)
                             end
                         end
                     end
+
+
                 end
 
                 -- Spell cooldown + desaturation
@@ -5062,6 +5249,27 @@ local function UpdateTrackedBarIcons(barKey)
                 -- Store Blizzard child mapping so proc glow hooks can find our icon
                 ourIcon._blizzChild = blizzChild
 
+                -- Pandemic glow (buff bars only)
+                if isBuffBarForOvr then
+                    ApplyPandemicGlow(ourIcon, blizzChild, barData)
+                elseif ourIcon._pandemicGlowActive then
+                    if not ourIcon._procGlowActive and not ourIcon._isActive then
+                        StopNativeGlow(ourIcon._glowOverlay)
+                    end
+                    ourIcon._pandemicGlowActive = false
+                end
+
+                -- Untracked overlay: red tint for spells not in Blizzard CDM
+                -- Only applies to spells that exist in the CDM category system (have a cdID).
+                -- Extras (racials, trinkets, health items) have no cdID and are never overlaid.
+                local isUntracked = _spellToCooldownID[spellID]
+                    and not blizzChild
+                    and not _tickBlizzAllChildCache[resolvedID]
+                    and not _tickBlizzAllChildCache[spellID]
+                    and not _tickBlizzChildCache[resolvedID]
+                    and not _tickBlizzChildCache[spellID]
+                ApplyUntrackedOverlay(ourIcon, spellID, isUntracked)
+
                 ourIcon:Show()
 
                 -- Hide buff icons when inactive
@@ -5085,6 +5293,8 @@ local function UpdateTrackedBarIcons(barKey)
             else
                 -- No texture available yet (spell not in spellbook?)
                 ourIcon:Hide()
+                if ourIcon._untrackedOverlay then ourIcon._untrackedOverlay:Hide() end
+                ourIcon._isUntracked = false
             end
             end -- healthItem else
         end
@@ -5098,6 +5308,9 @@ local function UpdateTrackedBarIcons(barKey)
             StopNativeGlow(ic._glowOverlay)
             ic._procGlowActive = false
         end
+        ic._pandemicGlowActive = false
+        if ic._untrackedOverlay then ic._untrackedOverlay:Hide() end
+        ic._isUntracked = false
         ic:Hide()
     end
 
@@ -5105,8 +5318,12 @@ local function UpdateTrackedBarIcons(barKey)
     -- active, or when hideBuffsWhenInactive can swap which icons are visible
     -- without changing the total count (e.g. Eclipse Solar hides while Lunar
     -- shows — same count but different icons need repositioning).
+    -- Skip the hideBuffsWhenInactive forced layout during unlock mode since
+    -- no icons are hidden then (avoids per-tick LayoutCDMBar that causes jitter).
+    local hbiForced = isBuffBarForOvr and barData.hideBuffsWhenInactive
+        and not EllesmereUI._unlockActive
     local needsLayout = visCount ~= prevCount or hasCompanions or frame._hadCompanions
-        or (isBuffBarForOvr and barData.hideBuffsWhenInactive)
+        or hbiForced
     frame._hadCompanions = hasCompanions
     if needsLayout then
         frame._prevVisibleCount = visCount
@@ -5117,7 +5334,7 @@ ns.UpdateTrackedBarIcons = UpdateTrackedBarIcons
 
 local function UpdateAllCDMBars(dt)
     cdmUpdateThrottle = cdmUpdateThrottle + dt
-    if cdmUpdateThrottle < CDM_UPDATE_INTERVAL then return end
+    if cdmUpdateThrottle < 0.1 then return end
     cdmUpdateThrottle = 0
 
     -- Wipe per-tick caches (GCD, charges, auras, totem info)
@@ -5405,8 +5622,12 @@ local function UpdateAllCDMBars(dt)
         end
     end
 
+    --[[ DISABLED: useBlizzardBuffBars feature temporarily removed
+    local useBlizzBuffs = p.cdmBars.useBlizzardBuffBars
+    --]]
+    local useBlizzBuffs = false
     for _, barData in ipairs(p.cdmBars.bars) do
-        if barData.enabled then
+        if barData.enabled and not (useBlizzBuffs and barData.key == "buffs") then
             if BLIZZ_CDM_FRAMES[barData.key] then
                 -- Default bar: use tracked spells if snapshotted, otherwise mirror Blizzard
                 -- trackedSpells == nil means never snapshotted; empty table means user cleared all
@@ -5528,11 +5749,6 @@ local function _CDMApplyVisibility()
         if frame then
             local vis = barData.barVisibility or "always"
 
-            -- Migration: convert old housingHideEnabled to new visHideHousing
-            if barData.visHideHousing == nil and barData.housingHideEnabled ~= nil then
-                barData.visHideHousing = (barData.housingHideEnabled ~= false)
-            end
-
             -- Priority 1: vehicle always hides
             if inVehicle then
                 _CDMStopFade(frame)
@@ -5551,6 +5767,15 @@ local function _CDMApplyVisibility()
             elseif vis == "in_combat" then
                 _CDMStopFade(frame)
                 if inCombat then
+                    frame:SetAlpha(barData.barBgAlpha or 1)
+                    if frame.EnableMouseMotion then frame:EnableMouseMotion(true) end
+                else
+                    frame:SetAlpha(0)
+                    if frame.EnableMouseMotion then frame:EnableMouseMotion(false) end
+                end
+            elseif vis == "out_of_combat" then
+                _CDMStopFade(frame)
+                if not inCombat then
                     frame:SetAlpha(barData.barBgAlpha or 1)
                     if frame.EnableMouseMotion then frame:EnableMouseMotion(true) end
                 else
@@ -5753,26 +5978,48 @@ BuildAllCDMBars = function()
         HideBlizzardCDM()
     end
 
+    --[[ DISABLED: useBlizzardBuffBars feature temporarily removed
+    local useBlizzBuffs = p.cdmBars.useBlizzardBuffBars
+    if useBlizzBuffs and p.cdmBars.hideBlizzard then
+        RestoreBlizzardBuffFrame()
+    end
+    --]]
+    local useBlizzBuffs = false
+
     -- Build each bar and populate fast lookup
     wipe(barDataByKey)
     for i, barData in ipairs(p.cdmBars.bars) do
         barDataByKey[barData.key] = barData
-        BuildCDMBar(i)
-        RefreshCDMIconAppearance(barData.key)
-        -- Reset cached icon state so textures re-evaluate after a character switch
-        local icons = cdmBarIcons[barData.key]
-        if icons then
-            for _, icon in ipairs(icons) do
-                icon._lastTex = nil
-                icon._lastDesat = nil
-                icon._spellID = nil
-                icon._blizzChild = nil
+        if useBlizzBuffs and barData.key == "buffs" then
+            local frame = cdmBarFrames[barData.key]
+            if frame then frame:Hide() end
+        else
+            BuildCDMBar(i)
+            RefreshCDMIconAppearance(barData.key)
+            -- Reset cached icon state so textures re-evaluate after a character switch
+            local icons = cdmBarIcons[barData.key]
+            if icons then
+                for _, icon in ipairs(icons) do
+                    icon._lastTex = nil
+                    icon._lastDesat = nil
+                    icon._spellID = nil
+                    icon._blizzChild = nil
+                end
             end
+            local frame = cdmBarFrames[barData.key]
+            if frame then frame._prevVisibleCount = nil end
+            LayoutCDMBar(barData.key)
+            ApplyCDMTooltipState(barData.key)
         end
-        local frame = cdmBarFrames[barData.key]
-        if frame then frame._prevVisibleCount = nil end
-        LayoutCDMBar(barData.key)
-        ApplyCDMTooltipState(barData.key)
+    end
+    -- Second pass: reapply unlock-mode anchors now that ALL bars are
+    -- positioned and sized.  The first pass (inside LayoutCDMBar) may
+    -- have run ReapplyOwnAnchor before the target bar was repositioned
+    -- (e.g. cooldowns processed before utility).  This corrects that.
+    if EllesmereUI.ReapplyOwnAnchor then
+        for _, barData in ipairs(p.cdmBars.bars) do
+            EllesmereUI.ReapplyOwnAnchor("CDM_" .. barData.key)
+        end
     end
     _CDMApplyVisibility()
     UpdateCDMKeybinds()
@@ -6309,14 +6556,21 @@ function ns.AddPresetToBar(barKey, preset)
     local p = ECME.db.profile
     for _, b in ipairs(p.cdmBars.bars) do
         if b.key == barKey then
-            if not b.customSpells then return false end
             local primaryID = preset.spellIDs[1]
+            -- Determine which spell list to use
+            local spellList
+            if b.customSpells then
+                spellList = b.customSpells
+            else
+                if not b.extraSpells then b.extraSpells = {} end
+                spellList = b.extraSpells
+            end
             -- Check not already tracked
-            for _, existing in ipairs(b.customSpells) do
+            for _, existing in ipairs(spellList) do
                 if existing == primaryID then return false, "exists" end
             end
             -- Add primary ID as the icon slot
-            b.customSpells[#b.customSpells + 1] = primaryID
+            spellList[#spellList + 1] = primaryID
             -- Store duration for primary
             if not b.customSpellDurations then b.customSpellDurations = {} end
             b.customSpellDurations[primaryID] = preset.duration
@@ -6354,16 +6608,12 @@ function ns.AddTrackedSpell(barKey, id, isExtra)
                 local numRows = b.numRows or 1
                 if numRows < 1 then numRows = 1 end
                 local curCount = #b.customSpells
-                local stride = math.ceil(curCount / numRows)
+                local stride, _, topRowCount = ComputeTopRowStride(b, curCount)
                 if stride < 1 then stride = 1 end
-                local topRowCount = curCount - (numRows - 1) * stride
-                if topRowCount < 0 then topRowCount = 0 end
                 -- New count after insert
                 local newCount = curCount + 1
-                local newStride = math.ceil(newCount / numRows)
+                local newStride, _, newTopRow = ComputeTopRowStride(b, newCount)
                 if newStride < 1 then newStride = 1 end
-                local newTopRow = newCount - (numRows - 1) * newStride
-                if newTopRow < 0 then newTopRow = 0 end
                 -- If stride didn't change, insert at end of top row section
                 if newStride == stride and newTopRow > topRowCount then
                     table.insert(b.customSpells, topRowCount + 1, id)
@@ -6386,15 +6636,11 @@ function ns.AddTrackedSpell(barKey, id, isExtra)
                 local numRows = b.numRows or 1
                 if numRows < 1 then numRows = 1 end
                 local curCount = #b.trackedSpells
-                local stride = math.ceil(curCount / numRows)
+                local stride, _, topRowCount = ComputeTopRowStride(b, curCount)
                 if stride < 1 then stride = 1 end
-                local topRowCount = curCount - (numRows - 1) * stride
-                if topRowCount < 0 then topRowCount = 0 end
                 local newCount = curCount + 1
-                local newStride = math.ceil(newCount / numRows)
+                local newStride, _, newTopRow = ComputeTopRowStride(b, newCount)
                 if newStride < 1 then newStride = 1 end
-                local newTopRow = newCount - (numRows - 1) * newStride
-                if newTopRow < 0 then newTopRow = 0 end
                 if newStride == stride and newTopRow > topRowCount then
                     table.insert(b.trackedSpells, topRowCount + 1, id)
                 else
@@ -6607,7 +6853,7 @@ function ns.AddCDMBar(barType, name, numRows)
     bars[#bars + 1] = {
         key = key, name = name or ((barType == "misc" and "Miscellaneous " or "Custom " .. typeLabel .. " Bar ") .. (typeCount + 1)),
         barType = barType,
-        enabled = true, barScale = 1.0, iconSize = 36, numRows = numRows or 1,
+        enabled = true, iconSize = 36, numRows = numRows or 1,
         spacing = 2,
         borderSize = 1, borderR = 0, borderG = 0, borderB = 0, borderA = 1,
         borderClassColor = false, borderThickness = "thin",
@@ -6631,14 +6877,9 @@ function ns.AddCDMBar(barType, name, numRows)
         -- Custom bars use a spell list instead of mirroring Blizzard
         customSpells = {},
         outOfRangeOverlay = false,
+        pandemicGlow = (barType == "buffs") or false,
+        pandemicR = 1, pandemicG = 1, pandemicB = 0,
     }
-    -- Auto-populate new misc bars with player's current extras
-    if barType == "misc" then
-        local newBar = bars[#bars]
-        for _, ex in ipairs(GetExtraSpells()) do
-            newBar.customSpells[#newBar.customSpells + 1] = ex.spellID
-        end
-    end
     BuildAllCDMBars()
     -- Immediately populate icons so the bar is visible without a /reload
     UpdateCustomBarIcons(key)
@@ -6682,10 +6923,6 @@ local function CDMFirstLoginCapture()
     for _, barData in ipairs(p.cdmBars.bars) do
         local cap = captured[barData.key]
         if cap then
-            -- Bar scale: the Edit Mode frame scale (drag-handle).
-            if cap.barScale then
-                barData.barScale = cap.barScale
-            end
             -- Icon size: visual size from child icon (base width * child scale).
             if cap.iconSize then
                 barData.iconSize = cap.iconSize
@@ -6703,14 +6940,11 @@ local function CDMFirstLoginCapture()
                 barData.growDirection = cap.isHorizontal and "RIGHT" or "DOWN"
                 barData.verticalOrientation = not cap.isHorizontal
             end
-            -- Position: divide by scale so SetScale() reproduces the
-            -- original on-screen position exactly.
+            -- Position: no scale division needed (scale is always 1)
             if cap.point then
-                local scale = barData.barScale or 1.0
-                if scale < 0.1 then scale = 1.0 end
                 p.cdmBarPositions[barData.key] = {
                     point = cap.point, relPoint = cap.relPoint,
-                    x = cap.x / scale, y = cap.y / scale,
+                    x = cap.x, y = cap.y,
                 }
             end
         end
@@ -6725,6 +6959,7 @@ end
 -------------------------------------------------------------------------------
 RegisterCDMUnlockElements = function()
     if not EllesmereUI or not EllesmereUI.RegisterUnlockElements then return end
+    local MK = EllesmereUI.MakeUnlockElement
 
     -- Build a lookup of which bars are anchored to which parent
     local anchorChildren = {}  -- parentKey -> { childKey1, childKey2, ... }
@@ -6736,39 +6971,59 @@ RegisterCDMUnlockElements = function()
         end
     end
 
+    -- Helper: count spells in a bar's data
+    local function CountBarSpells(bd)
+        local count = 0
+        if bd.customSpells then
+            for _, sid in ipairs(bd.customSpells) do
+                if sid and sid ~= 0 then count = count + 1 end
+            end
+        elseif bd.trackedSpells then
+            for _, sid in ipairs(bd.trackedSpells) do
+                if sid and sid ~= 0 then count = count + 1 end
+            end
+            if bd.extraSpells then
+                for _, sid in ipairs(bd.extraSpells) do
+                    if sid and sid ~= 0 then count = count + 1 end
+                end
+            end
+        end
+        return count
+    end
+
+    -- Helper: compute bar dimensions from bar data
+    local function ComputeBarSize(bd, count)
+        local iW = SnapForScale(bd.iconSize or 36, 1)
+        local iH = iW
+        if (bd.iconShape or "none") == "cropped" then
+            iH = SnapForScale(math.floor((bd.iconSize or 36) * 0.80 + 0.5), 1)
+        end
+        local sp = SnapForScale(bd.spacing or 2, 1)
+        local rows = bd.numRows or 1
+        if rows < 1 then rows = 1 end
+        local stride = ComputeTopRowStride(bd, count)
+        local grow = bd.growDirection or "RIGHT"
+        local isH = (grow == "RIGHT" or grow == "LEFT")
+        if isH then
+            return stride * iW + (stride - 1) * sp,
+                   rows * iH + (rows - 1) * sp
+        else
+            return rows * iW + (rows - 1) * sp,
+                   stride * iH + (stride - 1) * sp
+        end
+    end
+
     local elements = {}
     for _, barData in ipairs(ECME.db.profile.cdmBars.bars) do
         local key = barData.key
         local frame = cdmBarFrames[key]
         if frame and barData.enabled then
-            -- Skip bars anchored to party frame, player frame, or mouse cursor (not movable via unlock mode)
+            -- Skip bars anchored to party frame, player frame, or mouse cursor
             local isPartyAnchored = barData.anchorTo == "partyframe"
             local isPlayerFrameAnchored = barData.anchorTo == "playerframe"
             local isMouseAnchored = barData.anchorTo == "mouse"
             if not isPartyAnchored and not isPlayerFrameAnchored and not isMouseAnchored then
-            -- Custom bars are always registered so they can be positioned
-            -- before spells are added. Main bars (mirroring Blizzard viewers)
-            -- are only registered once they have spells to show.
             local bd = barDataByKey[key]
-            local isCustomBar = bd and bd.customSpells ~= nil
-            local iconCount = 0
-            if bd then
-                if bd.customSpells then
-                    for _, sid in ipairs(bd.customSpells) do
-                        if sid and sid ~= 0 then iconCount = iconCount + 1 end
-                    end
-                elseif bd.trackedSpells then
-                    for _, sid in ipairs(bd.trackedSpells) do
-                        if sid and sid ~= 0 then iconCount = iconCount + 1 end
-                    end
-                    if bd.extraSpells then
-                        for _, sid in ipairs(bd.extraSpells) do
-                            if sid and sid ~= 0 then iconCount = iconCount + 1 end
-                        end
-                    end
-                end
-            end
-            if isCustomBar or iconCount > 0 then
             -- Collect linked unlock element keys (children anchored to this bar)
             local linked = nil
             if anchorChildren[key] then
@@ -6778,7 +7033,7 @@ RegisterCDMUnlockElements = function()
                 end
             end
 
-            elements[#elements + 1] = {
+            elements[#elements + 1] = MK({
                 key = "CDM_" .. key,
                 label = "CDM: " .. barData.name,
                 group = "Cooldown Manager",
@@ -6789,100 +7044,101 @@ RegisterCDMUnlockElements = function()
                     local f = cdmBarFrames[key]
                     if not f then return 100, 36 end
                     local w, h = f:GetWidth(), f:GetHeight()
-                    -- If the frame has a real size and we're not in unlock
-                    -- mode for a buff bar, trust the frame dimensions.
-                    local isBuff = (barData.barType == "buffs" or key == "buffs")
-                    local needsCompute = (w <= 1 or h <= 1)
-                        or (EllesmereUI._unlockActive and isBuff)
-                    if not needsCompute then return w, h end
-                    -- Compute size from bar data (spell count, icon size,
-                    -- spacing, rows) so we never rely on stale frame
-                    -- dimensions or hidden-icon visibility.
-                    local bd = barDataByKey[key]
-                    if not bd then return w > 1 and w or 100, h > 1 and h or 36 end
-                    -- Count spells from the authoritative data source
-                    local count = 0
-                    if bd.customSpells then
-                        for _, sid in ipairs(bd.customSpells) do
-                            if sid and sid ~= 0 then count = count + 1 end
-                        end
-                    elseif bd.trackedSpells then
-                        for _, sid in ipairs(bd.trackedSpells) do
-                            if sid and sid ~= 0 then count = count + 1 end
-                        end
-                        local extras = bd.extraSpells
-                        if extras then
-                            for _, sid in ipairs(extras) do
-                                if sid and sid ~= 0 then count = count + 1 end
-                            end
-                        end
+                    if w <= 1 or h <= 1 then
+                        local bd2 = barDataByKey[key]
+                        if not bd2 then return w > 1 and w or 100, h > 1 and h or 36 end
+                        local count = CountBarSpells(bd2)
+                        if count == 0 then return w > 1 and w or 100, h > 1 and h or 36 end
+                        return ComputeBarSize(bd2, count)
                     end
-                    if count == 0 then return w > 1 and w or 100, h > 1 and h or 36 end
-                    local bScale = bd.barScale or 1.0
-                    if bScale < 0.1 then bScale = 1.0 end
-                    local iW = SnapForScale(bd.iconSize or 36, bScale)
-                    local iH = iW
-                    if (bd.iconShape or "none") == "cropped" then
-                        iH = SnapForScale(math.floor((bd.iconSize or 36) * 0.80 + 0.5), bScale)
-                    end
-                    local sp = SnapForScale(bd.spacing or 2, bScale)
-                    local rows = bd.numRows or 1
-                    if rows < 1 then rows = 1 end
-                    local stride = math.ceil(count / rows)
-                    local grow = bd.growDirection or "RIGHT"
-                    local isH = (grow == "RIGHT" or grow == "LEFT")
-                    if isH then
-                        return stride * iW + (stride - 1) * sp,
-                               rows * iH + (rows - 1) * sp
-                    else
-                        return rows * iW + (rows - 1) * sp,
-                               stride * iH + (stride - 1) * sp
-                    end
+                    return w, h
                 end,
-                savePosition = function(_, point, relPoint, x, y, scale)
+                linkedDimensions = true,
+                setWidth = function(_, newW)
+                    -- Reverse-engineer iconSize from target width
+                    local bd2 = barDataByKey[key]
+                    if not bd2 then return end
+                    local count = CountBarSpells(bd2)
+                    if count == 0 then return end
+                    local rows = bd2.numRows or 1
+                    if rows < 1 then rows = 1 end
+                    local stride = ComputeTopRowStride(bd2, count)
+                    local grow = bd2.growDirection or "RIGHT"
+                    local isH = (grow == "RIGHT" or grow == "LEFT")
+                    local sp = SnapForScale(bd2.spacing or 2, 1)
+                    local rawIcon
+                    if isH then
+                        rawIcon = (newW - (stride - 1) * sp) / stride
+                    else
+                        rawIcon = (newW - (rows - 1) * sp) / rows
+                    end
+                    if rawIcon < 8 then rawIcon = 8 end
+                    bd2.iconSize = math.floor(rawIcon + 0.5)
+                    LayoutCDMBar(key)
+                end,
+                setHeight = function(_, newH)
+                    -- Reverse-engineer iconSize from target height
+                    local bd2 = barDataByKey[key]
+                    if not bd2 then return end
+                    local count = CountBarSpells(bd2)
+                    if count == 0 then return end
+                    local rows = bd2.numRows or 1
+                    if rows < 1 then rows = 1 end
+                    local stride = ComputeTopRowStride(bd2, count)
+                    local grow = bd2.growDirection or "RIGHT"
+                    local isH = (grow == "RIGHT" or grow == "LEFT")
+                    local sp = SnapForScale(bd2.spacing or 2, 1)
+                    local shape = bd2.iconShape or "none"
+                    local rawIcon
+                    if isH then
+                        rawIcon = (newH - (rows - 1) * sp) / rows
+                        if shape == "cropped" then rawIcon = rawIcon / 0.80 end
+                    else
+                        rawIcon = (newH - (stride - 1) * sp) / stride
+                        if shape == "cropped" then rawIcon = rawIcon / 0.80 end
+                    end
+                    if rawIcon < 8 then rawIcon = 8 end
+                    bd2.iconSize = math.floor(rawIcon + 0.5)
+                    LayoutCDMBar(key)
+                end,
+                savePos = function(_, point, relPoint, x, y)
                     local p = ECME.db.profile
                     -- Always store as CENTER/CENTER so the bar stays centered
                     -- when icon count changes across specs.
                     local f = cdmBarFrames[key]
                     if f and point == "TOPLEFT" and relPoint == "TOPLEFT" then
-                        local bScale = f:GetScale() or 1
                         local fw, fh = f:GetWidth() or 0, f:GetHeight() or 0
                         local cx = x + fw * 0.5
                         local cy = y - fh * 0.5
                         local uiW, uiH = UIParent:GetSize()
                         p.cdmBarPositions[key] = {
                             point = "CENTER", relPoint = "CENTER",
-                            x = cx - uiW * 0.5 / bScale, y = cy + uiH * 0.5 / bScale,
+                            x = cx - uiW * 0.5, y = cy + uiH * 0.5,
                         }
                     else
                         p.cdmBarPositions[key] = { point = point, relPoint = relPoint, x = x, y = y }
                     end
-                    for _, b in ipairs(p.cdmBars.bars) do
-                        if b.key == key and scale then b.barScale = scale; break end
+                    -- Skip rebuild when called from anchor propagation --
+                    -- the bar is already positioned correctly and rebuilding
+                    -- would re-trigger propagation in an infinite loop.
+                    if not EllesmereUI._propagatingSave then
+                        BuildAllCDMBars()
                     end
-                    BuildAllCDMBars()
                 end,
-                loadPosition = function()
+                loadPos = function()
                     return ECME.db.profile.cdmBarPositions[key]
                 end,
-                getScale = function()
-                    for _, b in ipairs(ECME.db.profile.cdmBars.bars) do
-                        if b.key == key then return b.barScale or 1.0 end
-                    end
-                    return 1.0
-                end,
-                clearPosition = function()
+                clearPos = function()
                     ECME.db.profile.cdmBarPositions[key] = nil
                 end,
-                applyPosition = function()
+                applyPos = function()
                     BuildAllCDMBars()
                 end,
                 isAnchored = function()
-                    local bd = barDataByKey[key]
-                    return bd and bd.anchorTo and bd.anchorTo ~= "none"
+                    local bd2 = barDataByKey[key]
+                    return bd2 and bd2.anchorTo and bd2.anchorTo ~= "none"
                 end,
-            }
-            end -- iconCount > 0
+            })
             end -- not isPartyAnchored
         end
     end
@@ -6892,6 +7148,7 @@ RegisterCDMUnlockElements = function()
     end
 end
 ns.RegisterCDMUnlockElements = RegisterCDMUnlockElements
+_G._ECME_RegisterUnlock = RegisterCDMUnlockElements
 
 -- RequestUpdate delegates to ns.RequestUpdate (defined in EllesmereUICdmBarGlows.lua).
 -- Falls back to no-op if bar glows module hasn't loaded yet.
@@ -6912,25 +7169,6 @@ end
 function ECME:OnInitialize()
     self.db = EllesmereUI.Lite.NewDB("EllesmereUICooldownManagerDB", DEFAULTS, true)
 
-    -- Migration: move _capturedOnce from per-profile to per-install (SV root).
-    local sv = self.db.sv
-    if not sv._capturedOnce then
-        if sv.profiles then
-            for _, prof in pairs(sv.profiles) do
-                if type(prof) == "table" and prof._capturedOnce then
-                    sv._capturedOnce = true
-                    break
-                end
-            end
-        end
-    end
-    -- Strip the old per-profile flag from all profiles
-    if sv.profiles then
-        for _, prof in pairs(sv.profiles) do
-            if type(prof) == "table" then prof._capturedOnce = nil end
-        end
-    end
-
     -- Save spec profile before StripDefaults runs on logout
     EllesmereUI.Lite.RegisterPreLogout(function()
         local p = ECME.db and ECME.db.profile
@@ -6939,52 +7177,13 @@ function ECME:OnInitialize()
         end
     end)
 
-    -- Migration: enable showStackCount on the buffs bar (was false by default)
-    do
-        local bars = self.db.profile.cdmBars and self.db.profile.cdmBars.bars
-        if bars then
-            for _, b in ipairs(bars) do
-                if b.key == "buffs" and b.showStackCount == false then
-                    b.showStackCount = true
-                end
-            end
-        end
-    end
-
-    -- Migration: backfill hideBuffsWhenInactive for bar entries saved before this key existed
-    -- AceDB does not deep-merge array elements, so nil means the key was absent (treat as true)
-    do
-        local bars = self.db.profile.cdmBars and self.db.profile.cdmBars.bars
-        if bars then
-            for _, b in ipairs(bars) do
-                if b.hideBuffsWhenInactive == nil then
-                    b.hideBuffsWhenInactive = true
-                end
-            end
-        end
-    end
-
-    -- Migration: rename barType "trinkets" to "misc" (4.7)
-    -- Runs across ALL profiles so switching profiles later works correctly.
-    if sv.profiles then
-        for _, prof in pairs(sv.profiles) do
-            if type(prof) == "table" and prof.cdmBars and prof.cdmBars.bars then
-                for _, b in ipairs(prof.cdmBars.bars) do
-                    if b.barType == "trinkets" then
-                        b.barType = "misc"
-                    end
-                end
-            end
-        end
-    end
-
     -- Check if we need first-login capture (per-install flag on SV root)
     self._needsCapture = not self.db.sv._capturedOnce
 
     -- Expose for options
     _G._ECME_AceDB = self.db
     _G._ECME_Apply = function()
-        RequestUpdate(); if UpdateBuffBars then UpdateBuffBars() end; BuildAllCDMBars(); ns.BuildTrackedBuffBars()
+        RequestUpdate(); BuildAllCDMBars(); ns.BuildTrackedBuffBars()
     end
 
     -- Append SharedMedia textures to buff bar runtime tables
@@ -7040,10 +7239,12 @@ function ECME:OnEnable()
     local oldSpecKey = p.activeSpecKey
     local newSpecKey = GetCurrentSpecKey()
     if newSpecKey ~= "0" and oldSpecKey and oldSpecKey ~= "0" and oldSpecKey ~= newSpecKey then
-        -- Spec changed (different character or respec while offline)
-        -- Save old spec data BEFORE updating activeSpecKey
-        SaveCurrentSpecProfile()
-        -- Now update to the new spec and load its profile
+        -- Spec changed (different character or respec while offline).
+        -- Do NOT re-save the old spec here -- the pre-logout hook already
+        -- saved it correctly. The live bar data at this point belongs to
+        -- the OLD spec key but may have been repointed by a profile switch
+        -- on a different character, so saving it again would corrupt the
+        -- old spec's saved profile with wrong data.
         SetActiveSpec()
         LoadSpecProfile(newSpecKey)
         _specValidated = true
@@ -7090,7 +7291,6 @@ function ECME:OnEnable()
 
     if ns.ApplyPerSlotHidingAndPackSoon then ns.ApplyPerSlotHidingAndPackSoon() end
     RequestUpdate()
-    if UpdateBuffBars then UpdateBuffBars() end
 
     if ns.HookAllCDMChildren then
         ns.HookAllCDMChildren(_G.BuffIconCooldownViewer)
@@ -7222,25 +7422,47 @@ local function TalentAwareReconcile()
         if not dormant then dormant = {} end
 
         -- Phase 1: separate active list into still-known and newly-dormant
+        -- Also check IsPlayerSpell as a fallback for spells the CDM viewer
+        -- hasn't updated yet (e.g. choice-node talent swaps).
+        local _IPS = IsPlayerSpell
         local active = {}
+        local seenInActive = {}
         for i, sid in ipairs(spellList) do
             if sid and sid ~= 0 then
-                if knownSet[sid] then
+                if seenInActive[sid] then
+                    -- Duplicate already in active list -- skip silently
+                elseif knownSet[sid] or (_IPS and _IPS(sid)) then
                     active[#active + 1] = sid
+                    seenInActive[sid] = true
                 else
-                    -- Spell is no longer known — save its slot index and move to dormant
+                    -- Spell is no longer known -- save its slot index and move to dormant
                     dormant[sid] = i
                 end
             end
         end
 
-        -- Phase 2: check dormant spells — any that are now known get re-inserted
+        -- Build a set of spells already in the active list for dedup
+        local activeSet = seenInActive
+
+        -- Phase 2: check dormant spells -- any that are now known get re-inserted
         -- Collect returning spells sorted by their saved slot index (lowest first)
-        -- so insertions don't shift each other's target positions
+        -- so insertions don't shift each other's target positions.
+        -- Also check IsPlayerSpell directly on dormant spells as a fallback --
+        -- the CDM viewer may not have updated its entries yet after a talent
+        -- swap (e.g. choice-node spells like Bladestorm/Avatar share a viewer
+        -- slot and the viewer may still report the old spell's ID).
         local returning = {}
         for sid, savedSlot in pairs(dormant) do
-            if knownSet[sid] and not (removed and removed[sid]) then
-                returning[#returning + 1] = { sid = sid, slot = savedSlot }
+            local isKnown = knownSet[sid]
+                or (_IPS and _IPS(sid))
+            if isKnown and not (removed and removed[sid]) then
+                -- Only return spells that aren't already in the active list
+                if not activeSet[sid] then
+                    returning[#returning + 1] = { sid = sid, slot = savedSlot }
+                else
+                    -- Already active -- just clean it from dormant
+                    dormant[sid] = nil
+                end
             end
         end
         table.sort(returning, function(a, b) return a.slot < b.slot end)
@@ -7482,49 +7704,6 @@ function ECME:CDMFinishSetup()
     end
     ns.BuildTrackedBuffBars()
 
-    -- One-time migration: strip passive spellIDs that may have been stored
-    -- before the passive filter was added. Runs once per saved-variables file,
-    -- keyed on a flag so it never runs again after the first clean pass.
-    -- Only touches trackedSpells/customSpells — never removedSpells, dormantSpells,
-    -- positions, sizes, or any other user data.
-    do
-        local p = ECME.db and ECME.db.profile
-        if p and not p._migratedPassiveSpellIDs then
-            local function StripPassives(arr)
-                if not arr then return end
-                for i = #arr, 1, -1 do
-                    local sid = arr[i]
-                    if sid and IsTrulyPassive(sid) then
-                        table.remove(arr, i)
-                    end
-                end
-            end
-            if p.cdmBars and p.cdmBars.bars then
-                for _, barData in ipairs(p.cdmBars.bars) do
-                    -- Only strip passives from cooldown/utility bars.
-                    -- Buff bars track proc auras which are passive by nature.
-                    if barData.key ~= "buffs" then
-                        StripPassives(barData.trackedSpells)
-                        StripPassives(barData.customSpells)
-                    end
-                end
-            end
-            if p.specProfiles then
-                for _, specData in pairs(p.specProfiles) do
-                    if specData.barSpells then
-                        for barKey, barSpells in pairs(specData.barSpells) do
-                            if barKey ~= "buffs" then
-                                StripPassives(barSpells.trackedSpells)
-                                StripPassives(barSpells.customSpells)
-                            end
-                        end
-                    end
-                end
-            end
-            p._migratedPassiveSpellIDs = true
-        end
-    end
-
     -- Force Blizzard viewers on-screen briefly so their children populate,
     -- then snapshot. Handles the case where viewers never populate on their own.
     -- StartResnapshotRetry handles all retries; no extra eager timers needed.
@@ -7554,11 +7733,9 @@ function ECME:CDMFinishSetup()
     end
     self._cdmTickFrame:Show()
 
-    -- Register with unlock mode after a short delay (EllesmereUI may not be ready yet)
-    C_Timer.After(0.5, function()
-        RegisterCDMUnlockElements()
-        ns.RegisterTBBUnlockElements()
-    end)
+    -- Register with unlock mode
+    RegisterCDMUnlockElements()
+    ns.RegisterTBBUnlockElements()
 end
 
 -- Event frame
@@ -7659,8 +7836,6 @@ local function ScheduleRosterRebuild()
     end)
 end
 
--- _unitAuraTimer stored on ECME to stay within the 200 local/upvalue limit.
-ECME._unitAuraTimer = nil
 eventFrame:SetScript("OnEvent", function(_, event, unit, updateInfo, arg3)
     if not ECME.db then return end
     if event == "PLAYER_LOGOUT" then
@@ -7727,7 +7902,14 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, updateInfo, arg3)
         -- Re-hide immediately so the Blizzard CDM doesn't reappear.
         local p = ECME.db and ECME.db.profile
         if p and p.cdmBars and p.cdmBars.hideBlizzard then
-            C_Timer.After(0, function() HideBlizzardCDM() end)
+            C_Timer.After(0, function()
+                HideBlizzardCDM()
+                --[[ DISABLED: useBlizzardBuffBars feature temporarily removed
+                if p.cdmBars.useBlizzardBuffBars then
+                    RestoreBlizzardBuffFrame()
+                end
+                --]]
+            end)
         end
         return
     end
@@ -7846,19 +8028,9 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, updateInfo, arg3)
             RebuildSpellToCooldownID()
         end)
     end
-    if event == "UNIT_AURA" and unit == "player" then
-        -- Throttle: buff bars only need ~5fps refresh, not every aura event
-        if not ECME._unitAuraTimer then
-            ECME._unitAuraTimer = C_Timer.NewTimer(0.2, function()
-                ECME._unitAuraTimer = nil
-                if UpdateBuffBars then UpdateBuffBars() end
-            end)
-        end
-        return
-    end
+    if event == "UNIT_AURA" then return end
     if ns.ApplyPerSlotHidingAndPackSoon then ns.ApplyPerSlotHidingAndPackSoon() end
     RequestUpdate()
-    if UpdateBuffBars then UpdateBuffBars() end
 end)
 
 -------------------------------------------------------------------------------
@@ -7975,10 +8147,11 @@ SlashCmdList.CDMSTACKS = function()
 
         for i = 1, blizzFrame:GetNumChildren() do
             local child = select(i, blizzFrame:GetChildren())
-            if child and child.Icon and child.Icon:GetTexture() then
+            local dbgIw = child and child.Icon
+            if dbgIw and not dbgIw.GetTexture and dbgIw.Icon then dbgIw = dbgIw.Icon end
+            if dbgIw and dbgIw.GetTexture and dbgIw:GetTexture() then
                 local cdID = child.cooldownID
                 if not cdID and child.cooldownInfo then cdID = child.cooldownInfo.cooldownID end
-
                 local resolvedSid
                 if cdID and C_CooldownViewer and C_CooldownViewer.GetCooldownViewerCooldownInfo then
                     local info = C_CooldownViewer.GetCooldownViewerCooldownInfo(cdID)

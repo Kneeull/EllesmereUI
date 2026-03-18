@@ -3,8 +3,6 @@
 --  Design-first scaffold: background, sidebar, header, content area, controls
 --  Meant to be shared across the entire EllesmereUI addon suite.
 -------------------------------------------------------------------------------
-if EllesmereUI and EllesmereUI._loaded then return end   -- already loaded by another addon in the suite
-
 local EUI_HOST_ADDON = ...
 
 -------------------------------------------------------------------------------
@@ -272,7 +270,6 @@ end
 -------------------------------------------------------------------------------
 local EllesmereUI = _G.EllesmereUI or {}
 _G.EllesmereUI = EllesmereUI
-EllesmereUI._loaded = true
 EllesmereUI.GLOBAL_KEY = "_EUIGlobal"
 EllesmereUI.ADDON_ROSTER = ADDON_ROSTER
 EllesmereUI.LOCALE_FONT_FALLBACK = LOCALE_FONT_FALLBACK
@@ -389,7 +386,7 @@ local function MakeDropdownArrow(parent, xPad, ppOverride)
 end
 
 local function MakeBorder(parent, r, g, b, a, ppOverride)
-    -- Wrapper around PP.CreateBorder that returns the legacy MakeBorder API.
+    -- Wrapper around PP.CreateBorder that returns the MakeBorder API.
     -- ppOverride: pass PanelPP for panel context, defaults to real PP for game context.
     local pp = ppOverride or PP
     local alpha = a or 1
@@ -639,6 +636,7 @@ do
             if _G._EUF_ReloadFrames then _G._EUF_ReloadFrames() end
             if _G._ERB_Apply then _G._ERB_Apply() end
             if _G._EAB_Apply then _G._EAB_Apply() end
+            if _G._ECME_Apply then _G._ECME_Apply() end
         end
     end
 
@@ -1277,18 +1275,7 @@ function EllesmereUI.GetFontsDB()
             outlineMode = "shadow",
         }
     end
-    -- Migrate legacy per-addon keys (no longer used)
     local f = EllesmereUIDB.fonts
-    f.globalEnabled = nil
-    f.actionBars    = nil
-    f.nameplates    = nil
-    f.unitFrames    = nil
-    f.cdm           = nil
-    f.resourceBars  = nil
-    f.auraBuff      = nil
-    f.raidFrames    = nil
-    f.minimapChat   = nil
-    f.extras        = nil
     return f
 end
 
@@ -1864,6 +1851,54 @@ EllesmereUI._widgetRefreshList = _widgetRefreshList
 EllesmereUI._rowCounters     = rowCounters
 
 -------------------------------------------------------------------------------
+--  MakeUnlockElement  --  shared factory for unlock mode element tables
+--
+--  Every addon calls this to build a standardized registration table.
+--  Required fields in opts:
+--    key        (string)   unique element key, e.g. "MainBar", "ERB_Health"
+--    label      (string)   human-readable name shown on the mover
+--    group      (string)   grouping label in menus, e.g. "Action Bars"
+--    order      (number)   sort order (lower = earlier)
+--    getFrame   (function) -> frame  returns the movable frame
+--    getSize    (function) -> w, h   returns authoritative width, height
+--    savePos    (function(key, point, relPoint, x, y))  persist + apply
+--    loadPos    (function(key)) -> { point, relPoint, x, y } or nil
+--    clearPos   (function(key))  remove saved position
+--    applyPos   (function(key))  apply saved position to the live frame
+--
+--  Optional fields:
+--    setWidth   (function(key, w))  set element width and rebuild
+--    setHeight  (function(key, h))  set element height and rebuild
+--    isHidden   (function(key)) -> bool  true if element is disabled/hidden
+--    isAnchored (function(key)) -> bool  true if anchored to another element
+--    onLiveMove (function(key))  called each frame during drag
+--    linkedKeys (table)  list of element keys that move with this one
+--    noResize   (boolean) true for Blizzard elements that cannot be resized
+-------------------------------------------------------------------------------
+function EllesmereUI.MakeUnlockElement(opts)
+    return {
+        key           = opts.key,
+        label         = opts.label,
+        group         = opts.group,
+        order         = opts.order,
+        getFrame      = opts.getFrame,
+        getSize       = opts.getSize,
+        savePosition  = opts.savePos,
+        loadPosition  = opts.loadPos,
+        clearPosition = opts.clearPos,
+        applyPosition = opts.applyPos,
+        setWidth      = opts.setWidth,
+        setHeight     = opts.setHeight,
+        isHidden      = opts.isHidden,
+        isAnchored    = opts.isAnchored,
+        onLiveMove    = opts.onLiveMove,
+        linkedKeys    = opts.linkedKeys,
+        noResize          = opts.noResize,
+        linkedDimensions  = opts.linkedDimensions,
+    }
+end
+
+-------------------------------------------------------------------------------
 --  Lazy-load stub: ResolveThemeColor
 --  Minimal version used by PLAYER_LOGIN before Widgets file initializes.
 --  The full version (with animated transitions etc.) replaces this in Widgets.
@@ -2319,6 +2354,197 @@ function EllesmereUI:ShowConfirmPopup(opts)
     end
 
     popup._dimmer:Show()
+end
+
+do
+-------------------------------------------------------------------------------
+--  Reset Gate
+--  Bump REQUIRED_RESET_VERSION whenever a breaking SavedVariables purge
+--  is released. Users whose stored _resetVersion is below this number will
+--  see the reset popup. Fresh installs are stamped at PLAYER_LOGIN and
+--  never see it.
+-------------------------------------------------------------------------------
+local REQUIRED_RESET_VERSION = 2
+
+function EllesmereUI.NeedsBetaReset()
+    if not EllesmereUIDB then return false end
+    -- Legacy: treat old _betaWiped flag as version 1
+    if EllesmereUIDB._betaWiped and not EllesmereUIDB._resetVersion then
+        EllesmereUIDB._resetVersion = 1
+    end
+    return (EllesmereUIDB._resetVersion or 0) < REQUIRED_RESET_VERSION
+end
+
+-- Stamp fresh installs so they never see the reset popup.
+-- Only stamps if the DB looks fresh (<=2 keys -- just ppUIScale from Startup).
+function EllesmereUI.StampResetVersion()
+    if not EllesmereUIDB then EllesmereUIDB = {} end
+    if (EllesmereUIDB._resetVersion or 0) >= REQUIRED_RESET_VERSION then return end
+    local keyCount = 0
+    for _ in pairs(EllesmereUIDB) do keyCount = keyCount + 1 end
+    if keyCount <= 2 then
+        EllesmereUIDB._resetVersion = REQUIRED_RESET_VERSION
+    end
+end
+end
+
+do
+    local welcomePopup, welcomeDimmer
+
+    local function CreateWelcomePopup()
+        if welcomePopup then return welcomePopup, welcomeDimmer end
+
+        local POPUP_W, POPUP_H = 525, 310
+
+        -- Dimmer
+        welcomeDimmer = CreateFrame("Frame", "EUIWelcomeDimmer", UIParent)
+        welcomeDimmer:SetFrameStrata("FULLSCREEN_DIALOG")
+        welcomeDimmer:SetFrameLevel(100)
+        welcomeDimmer:SetAllPoints(UIParent)
+        welcomeDimmer:EnableMouse(true)
+        welcomeDimmer:EnableMouseWheel(true)
+        welcomeDimmer:SetScript("OnMouseWheel", function() end)
+        welcomeDimmer:Hide()
+
+        local dimTex = SolidTex(welcomeDimmer, "BACKGROUND", 0, 0, 0, 0.25)
+        dimTex:SetAllPoints()
+
+        -- Popup frame
+        welcomePopup = CreateFrame("Frame", "EUIWelcomePopup", welcomeDimmer)
+        welcomePopup:SetSize(POPUP_W, POPUP_H)
+        welcomePopup:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
+        welcomePopup:SetFrameStrata("FULLSCREEN_DIALOG")
+        welcomePopup:SetFrameLevel(welcomeDimmer:GetFrameLevel() + 10)
+        welcomePopup:EnableMouse(true)
+
+        local bg = SolidTex(welcomePopup, "BACKGROUND", 0.06, 0.08, 0.10, 0.95)
+        bg:SetAllPoints()
+        MakeBorder(welcomePopup, BORDER_COLOR.r, BORDER_COLOR.g, BORDER_COLOR.b, 0.15)
+
+        -- Title
+        local EG = ELLESMERE_GREEN
+        local title = MakeFont(welcomePopup, 22, "", EG.r, EG.g, EG.b)
+        title:SetPoint("TOP", welcomePopup, "TOP", 0, -22)
+        title:SetText("EllesmereUI Beta Ending")
+
+        -- Message
+        local msg = MakeFont(welcomePopup, 12, nil, TEXT_DIM.r, TEXT_DIM.g, TEXT_DIM.b, TEXT_DIM.a)
+        msg:SetPoint("TOP", title, "BOTTOM", 0, -12)
+        msg:SetWidth(POPUP_W - 60)
+        msg:SetJustifyH("CENTER")
+        msg:SetWordWrap(true)
+        msg:SetSpacing(4)
+        msg:SetText("EllesmereUI has exited beta! Thank you all so much for helping with testing. During the two weeks of beat, EUI had a huge amount of systemic changes. These were necessary to build the systems that will make the addon stable, flexible, and maintainable long-term. \n\nBecause beta development moved so fast, many profiles were created during early unstable or bugged builds. Those profiles can carry forward issues that are hard to resolve and can cause ongoing problems for both users and development. This means that with beta ending, ALL BETA TESTERS must do a ONE TIME wipe of their settings.")
+
+        -- Disclaimer
+        local disc = welcomePopup:CreateFontString(nil, "OVERLAY")
+        disc:SetFont(EXPRESSWAY, 16, "")
+        disc:SetTextColor(1, 0.35, 0.35, 0.8)
+        disc:SetPoint("TOP", msg, "BOTTOM", 0, -20)
+        disc:SetWidth(POPUP_W - 60)
+        disc:SetJustifyH("CENTER")
+        disc:SetWordWrap(true)
+        disc:SetText("This will reset all EllesmereUI settings and Profiles to defaults.")
+
+        -- Inline button builder (self-contained so the popup works even if
+        -- EllesmereUI_Widgets.lua failed to load)
+        local function WelcomeBtn(parent, text, onClick)
+            local btn = CreateFrame("Button", nil, parent)
+            btn:SetSize(152, 32)
+            btn:SetFrameLevel(parent:GetFrameLevel() + 2)
+            local bbg = SolidTex(btn, "BACKGROUND", BTN_BG_R, BTN_BG_G, BTN_BG_B, BTN_BG_A)
+            bbg:SetAllPoints()
+            local bbrd = MakeBorder(btn, 1, 1, 1, BTN_BRD_A)
+            local blbl = MakeFont(btn, 13, nil, 1, 1, 1)
+            blbl:SetAlpha(BTN_TXT_A)
+            blbl:SetPoint("CENTER")
+            blbl:SetText(text)
+            btn:SetScript("OnEnter", function()
+                blbl:SetAlpha(BTN_TXT_HA)
+                bbrd:SetColor(1, 1, 1, BTN_BRD_HA)
+                bbg:SetColorTexture(BTN_BG_R, BTN_BG_G, BTN_BG_B, BTN_BG_HA)
+            end)
+            btn:SetScript("OnLeave", function()
+                blbl:SetAlpha(BTN_TXT_A)
+                bbrd:SetColor(1, 1, 1, BTN_BRD_A)
+                bbg:SetColorTexture(BTN_BG_R, BTN_BG_G, BTN_BG_B, BTN_BG_A)
+            end)
+            btn:SetScript("OnClick", function() if onClick then onClick() end end)
+            return btn
+        end
+
+        -- Reset button (large, accent-colored)
+        local resetBtn = CreateFrame("Button", nil, welcomePopup)
+        resetBtn:SetSize(228, 32)
+        resetBtn:SetFrameLevel(welcomePopup:GetFrameLevel() + 2)
+        do
+            local eg = ELLESMERE_GREEN
+            local rbg = SolidTex(resetBtn, "BACKGROUND", BTN_BG_R, BTN_BG_G, BTN_BG_B, BTN_BG_A)
+            rbg:SetAllPoints()
+            local rbrd = MakeBorder(resetBtn, eg.r, eg.g, eg.b, 0.8)
+            local rlbl = MakeFont(resetBtn, 13, nil, eg.r, eg.g, eg.b)
+            rlbl:SetAlpha(0.8)
+            rlbl:SetPoint("CENTER")
+            rlbl:SetText("Reset Settings")
+            resetBtn:SetScript("OnEnter", function()
+                rlbl:SetAlpha(1)
+                rbrd:SetColor(eg.r, eg.g, eg.b, 1)
+                rbg:SetColorTexture(BTN_BG_R, BTN_BG_G, BTN_BG_B, BTN_BG_HA)
+            end)
+            resetBtn:SetScript("OnLeave", function()
+                rlbl:SetAlpha(0.8)
+                rbrd:SetColor(eg.r, eg.g, eg.b, 0.8)
+                rbg:SetColorTexture(BTN_BG_R, BTN_BG_G, BTN_BG_B, BTN_BG_A)
+            end)
+            resetBtn:SetScript("OnClick", function()
+                -- Replace every saved variable global with a fresh empty table.
+                -- Using wipe() only empties the table but addons still hold
+                -- references and pre-logout hooks re-populate them before
+                -- ReloadUI serializes to disk.  Replacing the global severs
+                -- the reference so stale data is never written back.
+                local svNames = {
+                    "EllesmereUIActionBarsDB",
+                    "EllesmereUIAuraBuffRemindersDB",
+                    "EllesmereUICooldownManagerDB",
+                    "EllesmereUICursorDB",
+                    "EllesmereUINameplatesDB",
+                    "EllesmereUIResourceBarsDB",
+                    "EllesmereUIUnitFramesDB",
+                }
+                for _, name in ipairs(svNames) do
+                    _G[name] = {}
+                end
+                _G["EllesmereUIDB"] = { _resetVersion = 2 }
+                EllesmereUIDB = _G["EllesmereUIDB"]
+                ReloadUI()
+            end)
+        end
+
+        -- Close button (small)
+        local closeBtn = WelcomeBtn(welcomePopup, "Close", function() welcomeDimmer:Hide() end)
+        closeBtn:SetSize(76, 32)
+
+        -- Center both buttons as a group with 8px gap
+        local totalW = 228 + 8 + 76
+        local startX = -totalW / 2
+        resetBtn:SetPoint("BOTTOMLEFT", welcomePopup, "BOTTOM", startX, 29)
+        closeBtn:SetPoint("BOTTOMLEFT", resetBtn, "BOTTOMRIGHT", 8, 0)
+
+        -- Escape or dimmer click to close
+        WirePopupEscape(welcomePopup, welcomeDimmer)
+        welcomeDimmer:SetScript("OnMouseDown", function()
+            if not welcomePopup:IsMouseOver() then
+                welcomeDimmer:Hide()
+            end
+        end)
+
+        return welcomePopup, welcomeDimmer
+    end
+
+    function EllesmereUI:ShowWelcomePopup()
+        local popup, dimmer = CreateWelcomePopup()
+        dimmer:Show()
+    end
 end
 
 -------------------------------------------------------------------------------
@@ -3681,6 +3907,7 @@ local function CreateMainFrame()
     contentHeaderFrame:SetScript("OnMouseWheel", function(_, delta)
         if scrollFrame then scrollFrame:GetScript("OnMouseWheel")(scrollFrame, delta) end
     end)
+    contentHeaderFrame:SetClipsChildren(true)
     contentHeaderFrame:Hide()
     EllesmereUI._contentHeader = contentHeaderFrame
     local contentHeaderH = 0   -- current header height
@@ -4621,6 +4848,9 @@ local function PlaySearchHighlight(hl, targetFrame)
     end)
 end
 
+EllesmereUI.PlaySearchHighlight = PlaySearchHighlight
+EllesmereUI.GetSearchHighlight = GetSearchHighlight
+
 -- Collect ALL direct children of a wrapper sorted by original Y position (top to bottom).
 -- Groups them into sections: { header=frame, members={frame,...} }
 -- Every child belongs to the most recent section header above it.
@@ -4676,6 +4906,58 @@ local function CollectAllChildren(wrapper)
         end
     end
     return sections, orphans
+end
+
+function EllesmereUI:NavigateToElementSettings(moduleName, pageName, sectionName, preSelectFn, highlightText)
+    self:Show()
+    self:SelectModule(moduleName)
+    self:SelectPage(pageName)
+
+    -- Switch dropdown AFTER the page is loaded, then force a full rebuild.
+    -- This mirrors exactly what the dropdown's own onChange handler does.
+    if preSelectFn then
+        preSelectFn()
+        self:InvalidateContentHeaderCache()
+        local config = modules[moduleName]
+        if config and config.getHeaderBuilder then
+            local hb = config.getHeaderBuilder(pageName)
+            if hb then self:SetContentHeader(hb) end
+        end
+        self:RefreshPage(true)
+    end
+
+    C_Timer.After(0.05, function()
+        local cacheKey = moduleName .. "::" .. pageName
+        local cached = _pageCache[cacheKey]
+        if not cached or not cached.wrapper then return end
+
+        local sections = CollectAllChildren(cached.wrapper)
+        for _, sec in ipairs(sections) do
+            if sec.header._sectionName == sectionName then
+                -- Find the specific row to highlight and scroll to
+                local target = sec.header
+                if highlightText then
+                    for _, m in ipairs(sec.members) do
+                        if m._labelText and m._labelText:find(highlightText, 1, true) then
+                            target = m
+                            break
+                        end
+                    end
+                end
+
+                local a = target._origAnchor
+                if a then
+                    local scrollPos = math.abs(a[5]) - 40
+                    EllesmereUI.SmoothScrollTo(scrollPos)
+                    C_Timer.After(0.15, function()
+                        local hl = GetSearchHighlight()
+                        PlaySearchHighlight(hl, target)
+                    end)
+                end
+                return
+            end
+        end
+    end)
 end
 
 -- Get a searchable label for any child frame (tagged or not)
@@ -5579,6 +5861,7 @@ function EllesmereUI:Show()
 end
 function EllesmereUI:Hide()   if mainFrame then mainFrame:Hide() end end
 function EllesmereUI:Toggle()
+    if self.NeedsBetaReset() then self:ShowWelcomePopup(); return end
     self:EnsureLoaded()
     CreateMainFrame()
     if mainFrame:IsShown() then
@@ -5641,7 +5924,7 @@ end
 -------------------------------------------------------------------------------
 --  Slash commands
 -------------------------------------------------------------------------------
-EllesmereUI.VERSION = "4.9.3"
+EllesmereUI.VERSION = "5.1.4"
 
 -- Register this addon's version into a shared global table (taint-free at load time)
 if not _G._EUI_AddonVersions then _G._EUI_AddonVersions = {} end
@@ -5869,6 +6152,7 @@ SlashCmdList.EUIUNLOCK = function()
         print("|cffff6060[EllesmereUI]|r Cannot open options during combat.")
         return
     end
+    if EllesmereUI.NeedsBetaReset() then EllesmereUI:ShowWelcomePopup(); return end
     EllesmereUI:EnsureLoaded()
     if EllesmereUI._openUnlockMode then
         EllesmereUI._openUnlockMode()
@@ -5892,7 +6176,6 @@ SlashCmdList.EUIRESETSCALE = function()
     if EllesmereUIDB then
         EllesmereUIDB.ppUIScale = nil
         EllesmereUIDB.ppUIScaleAuto = nil
-        EllesmereUIDB.blizzUIScale = nil
     end
     print("|cff00ff00[EllesmereUI]|r UI scale reset. /reload to re-snapshot from your Blizzard scale.")
 end
@@ -5903,6 +6186,7 @@ function EllesmereUI:ShowModule(folderName)
         print("|cffff6060[EllesmereUI]|r Cannot open options during combat.")
         return
     end
+    if self.NeedsBetaReset() then self:ShowWelcomePopup(); return end
     self:EnsureLoaded()
     CreateMainFrame()
     RefreshSidebarStates()
@@ -6062,18 +6346,39 @@ do
             statsFrame:SetSize(160, 60)
             statsFrame:SetFrameStrata("LOW")
             statsText = statsFrame:CreateFontString(nil, "OVERLAY")
-            local font = EllesmereUI.ResolveFontName(EllesmereUI.GetFontsDB().global)
-            statsText:SetFont(font, 12, EllesmereUI.GetFontOutlineFlag())
             statsText:SetPoint("TOPLEFT")
             statsText:SetJustifyH("LEFT")
         end
+        -- Always update font, outline and shadow in case global options changed
+        if statsText then
+            local font = EllesmereUI.ResolveFontName(EllesmereUI.GetFontsDB().global)
+            statsText:SetFont(font, 12, EllesmereUI.GetFontOutlineFlag())
+            if EllesmereUI.GetFontUseShadow() then
+                statsText:SetShadowOffset(1, -1)
+            else
+                statsText:SetShadowOffset(0, 0)
+            end
+        end
         -- Apply saved position and scale
         local pos = EllesmereUIDB and EllesmereUIDB.secondaryStatsPos
+        local scale = 1.0
         if pos then
-            if pos.scale then pcall(function() statsFrame:SetScale(pos.scale) end) end
             if pos.point then
                 statsFrame:ClearAllPoints()
                 statsFrame:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 0)
+            end
+            if pos.scale then
+                scale = pos.scale
+            end
+        end
+        if statsText then
+            local font = EllesmereUI.ResolveFontName(EllesmereUI.GetFontsDB().global)
+            local fontSize = math.floor(12 * scale + 0.5)
+            statsText:SetFont(font, fontSize, EllesmereUI.GetFontOutlineFlag())
+            if EllesmereUI.GetFontUseShadow() then
+                statsText:SetShadowOffset(1, -1)
+            else
+                statsText:SetShadowOffset(0, 0)
             end
         end
         statsFrame:RegisterUnitEvent("UNIT_STATS", "player")
@@ -6258,6 +6563,14 @@ initFrame:SetScript("OnEvent", function(self, event)
     -- PLAYER_LOGIN: register demo modules (UI is built lazily on first open)
     self:UnregisterEvent("PLAYER_LOGIN")
 
+    -- Stamp fresh installs so they never see the reset popup
+    EllesmereUI.StampResetVersion()
+
+    -- Show reset popup on login if needed (short delay so the screen is ready)
+    if EllesmereUI.NeedsBetaReset() then
+        C_Timer.After(1.5, function() EllesmereUI:ShowWelcomePopup() end)
+    end
+
     -- Create native minimap button
     EllesmereUI.CreateMinimapButton()
 
@@ -6326,23 +6639,8 @@ initFrame:SetScript("OnEvent", function(self, event)
     if EllesmereUI._applyGuildChatPrivacy then EllesmereUI._applyGuildChatPrivacy() end
     if EllesmereUI._applySecondaryStats then EllesmereUI._applySecondaryStats() end
 
-    -- Re-read theme settings from SavedVariables (belt-and-suspenders for persistence)
+    -- Apply theme settings from SavedVariables
     if EllesmereUIDB then
-        -- Migrate legacy keys to new activeTheme model
-        if EllesmereUIDB.activeTheme == nil then
-            if EllesmereUIDB.customThemeEnabled then
-                if EllesmereUIDB.classColoredTheme then
-                    EllesmereUIDB.activeTheme = "Class Colored"
-                elseif EllesmereUIDB.accentColor then
-                    EllesmereUIDB.activeTheme = "Custom Color"
-                else
-                    EllesmereUIDB.activeTheme = "EllesmereUI"
-                end
-            end
-            -- Clean up legacy keys
-            EllesmereUIDB.customThemeEnabled = nil
-            EllesmereUIDB.classColoredTheme  = nil
-        end
         local theme = EllesmereUIDB.activeTheme or "EllesmereUI"
         ELLESMERE_GREEN._themeEnabled = true
         local r, g, b = EllesmereUI.ResolveThemeColor(theme)
@@ -6542,12 +6840,13 @@ EllesmereUI.VIS_VALUES = {
     never      = "Never",
     always     = "Always",
     mouseover  = "Mouseover",
-    in_combat  = "In Combat",
-    in_raid    = "In Raid Group",
+    in_combat      = "In Combat",
+    out_of_combat  = "Out of Combat",
+    in_raid        = "In Raid Group",
     in_party   = "In Party",
     solo       = "Solo",
 }
-EllesmereUI.VIS_ORDER = { "never", "always", "mouseover", "in_combat", "---", "in_raid", "in_party", "solo" }
+EllesmereUI.VIS_ORDER = { "never", "always", "mouseover", "in_combat", "out_of_combat", "---", "in_raid", "in_party", "solo" }
 
 -- Checkbox dropdown 2: Visibility Options (keys match DB fields)
 EllesmereUI.VIS_OPT_ITEMS = {
@@ -6660,6 +6959,7 @@ end
 function EllesmereUI.CheckVisibilityMode(mode, state)
     if mode == "never" then return false end
     if mode == "in_combat" then return state.inCombat end
+    if mode == "out_of_combat" then return not state.inCombat end
     if mode == "in_raid" then return state.inRaid end
     if mode == "in_party" then return state.inParty or state.inRaid end
     if mode == "solo" then return not state.inRaid and not state.inParty end

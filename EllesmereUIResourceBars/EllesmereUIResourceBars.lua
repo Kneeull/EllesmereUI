@@ -1,4 +1,4 @@
--------------------------------------------------------------------------------
+﻿-------------------------------------------------------------------------------
 --  EllesmereUIResourceBars.lua
 --  Custom class resource, health, and mana bar display
 --  Features: Health bar, primary resource bar (mana/rage/energy/etc),
@@ -82,6 +82,7 @@ local CHANNEL_TICK_DATA = {
     [198013]  = { tickInterval = 0.2 },                             -- Eye Beam (Havoc DH) — haste extends duration
     [473728]  = { tickInterval = 0.2 },                             -- Void Ray (Devourer DH) — haste extends duration
     [212084]  = { ticks = 10 },                                    -- Fel Devastation (Vengeance DH)
+    [198590]  = { ticks = 5 },                                     -- Drain Soul (Affliction Warlock)
 }
 
 -------------------------------------------------------------------------------
@@ -129,8 +130,10 @@ local POWER_COLORS = {
     ["MAELSTROM_BAR"]    = { 0.00, 0.50, 1.00 },
     ["INSANITY_BAR"]     = { 0.40, 0.00, 0.80 },
     ["FOCUS_BAR"]        = { 0.77, 0.53, 0.24 },
+    ["LUNAR_POWER_BAR"]  = { 0.30, 0.52, 0.90 },
     ["TIP_OF_THE_SPEAR"] = { 0.67, 0.83, 0.45 },
     ["WHIRLWIND_STACKS"] = { 0.78, 0.61, 0.43 },
+    ["ICICLES"] = { 0.45, 0.85, 1.00 },
     ["BREWMASTER_STAGGER"] = { 0.52, 1.00, 0.52 },  -- green (light stagger default)
 }
 
@@ -163,7 +166,9 @@ local function GetPrimaryPowerType()
     if classFile == "DRUID" then
         if form == 1 then return PT.ENERGY end
         if form == 5 then return PT.RAGE end
-        if spec == 1 then return PT.LUNAR_POWER end
+        if spec == 1 then return PT.MANA end
+        -- Balance: Mana on the power bar; Astral Power is a class resource bar
+        -- (mirrors Shadow Priest / Elemental Shaman pattern)
         return PT.MANA
     end
 
@@ -192,6 +197,41 @@ local function GetPrimaryPowerType()
     return PRIMARY_CLASS_MAP[classFile] or PT.MANA
 end
 
+--Function to get Icicles for Frost
+local ICICLES_SPELL_ID = 205473
+
+local function GetIcicleCount()
+    local _, classFile = UnitClass("player")
+    local spec = GetSpecialization()
+    if classFile ~= "MAGE" or spec ~= 3 then
+        return 0
+    end
+
+    if C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
+        local aura = C_UnitAuras.GetPlayerAuraBySpellID(ICICLES_SPELL_ID)
+        if aura then
+            local count = aura.applications or aura.charges or aura.points or 0
+            if count > 5 then count = 5 end
+            return count
+        end
+        return 0
+    end
+
+    if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
+        for i = 1, 255 do
+            local aura = C_UnitAuras.GetAuraDataByIndex("player", i, "HELPFUL")
+            if not aura then break end
+            if aura.spellId == ICICLES_SPELL_ID then
+                local count = aura.applications or aura.charges or aura.points or 0
+                if count > 5 then count = 5 end
+                return count
+            end
+        end
+    end
+
+    return 0
+end
+
 local function GetSecondaryResource()
     local _, classFile = UnitClass("player")
     local spec = GetSpecialization()
@@ -206,6 +246,12 @@ local function GetSecondaryResource()
     elseif classFile == "DRUID" and form == 1 then
         local mx = UnitPowerMax("player", PT.COMBO)
         return { power = PT.COMBO, max = (not issecretvalue or not issecretvalue(mx)) and mx or 5, type = "points" }
+    elseif classFile == "DRUID" and spec == 1 then
+        -- Balance: Astral Power as a class resource bar (like Elemental maelstrom)
+        local mx = UnitPowerMax("player", PT.LUNAR_POWER)
+        if issecretvalue and issecretvalue(mx) then mx = 100 end
+        if not mx or mx <= 0 then mx = 100 end
+        return { power = "LUNAR_POWER_BAR", max = mx, type = "bar" }
     elseif classFile == "MONK" and (spec == 3) then
         local mx = UnitPowerMax("player", PT.CHI)
         return { power = PT.CHI, max = (not issecretvalue or not issecretvalue(mx)) and mx or 5, type = "points" }
@@ -226,6 +272,8 @@ local function GetSecondaryResource()
     elseif classFile == "MAGE" and spec == 1 then
         local mx = UnitPowerMax("player", PT.ARCANE)
         return { power = PT.ARCANE, max = (not issecretvalue or not issecretvalue(mx)) and mx or 4, type = "points" }
+    elseif classFile == "MAGE" and spec == 3 then
+        return { power = "ICICLES", max = 5, type = "custom" }
     elseif classFile == "DEMONHUNTER" then
         -- Resolve specID: 581=Vengeance, 1480=Devourer, 577=Havoc
         local specID = spec and C_SpecializationInfo and C_SpecializationInfo.GetSpecializationInfo(spec)
@@ -323,7 +371,6 @@ local DEFAULTS = {
             enabled     = false,
             width       = 214,
             height      = 16,
-            scale       = 1.0,
             borderSize  = 0,
             borderR     = 0, borderG = 0, borderB = 0, borderA = 1,
             darkTheme   = false,
@@ -352,7 +399,6 @@ local DEFAULTS = {
             enabled     = true,
             width       = 214,
             height      = 14,
-            scale       = 1.0,
             borderSize  = 1,
             borderR     = 0, borderG = 0, borderB = 0, borderA = 1,
             darkTheme   = false,
@@ -378,10 +424,10 @@ local DEFAULTS = {
             thresholdPct     = 30,
             thresholdPartialOnly = false,
             thresholdR = 1.0, thresholdG = 0.2, thresholdB = 0.2, thresholdA = 1,
+            expandIfNoResource = false,
         },
         secondary = {
             enabled     = true,
-            scale       = 1.0,
             pipWidth    = 214,
             pipHeight   = 20,
             pipSpacing  = 1,
@@ -402,6 +448,7 @@ local DEFAULTS = {
             thresholdCount   = 3,
             thresholdPartialOnly = false,
             thresholdR = 0x0c/255, thresholdG = 0xd2/255, thresholdB = 0x9d/255, thresholdA = 1,
+            tickValues  = "",   -- comma-separated absolute resource values for tick marks (bar-type only)
             chargedR = 0.44, chargedG = 0.77, chargedB = 1.00, chargedA = 1,
             visibility  = "always",  -- "always","combat","target","mouseover","never","in_combat","in_raid","in_party","solo"
             visHideHousing = false,
@@ -437,7 +484,6 @@ local DEFAULTS = {
             spellTextSize = 11,
             spellTextX    = 0,
             spellTextY    = 0,
-            scale         = 1.0,
             unlockPos     = nil,
             showChannelTicks  = true,
             showTickMarks     = true,
@@ -450,7 +496,6 @@ local DEFAULTS = {
         general = {
             anchorX     = 0,
             anchorY     = -100,
-            unlocked    = false,
             orientation = "HORIZONTAL",  -- "HORIZONTAL","VERTICAL_UP","VERTICAL_DOWN"
             barTexture  = "none",
         },
@@ -466,6 +511,7 @@ local healthBar
 local primaryBar
 local secondaryFrame
 local secondaryBar  -- bar-style secondary (e.g. Devourer soul fragments, Elemental maelstrom)
+local secondaryBarTicks = {}  -- tick mark texture cache for bar-type secondary
 local castBarFrame
 local isInCombat = false
 local currentAlpha = 1
@@ -778,229 +824,177 @@ end
 -------------------------------------------------------------------------------
 local function RegisterUnlockElements()
     if not EllesmereUI or not EllesmereUI.RegisterUnlockElements then return end
+    local MK = EllesmereUI.MakeUnlockElement
+
+    -- Shared helper: save position to a settings sub-table and apply to frame
+    local function MakePosHelpers(getSettings, frame_fn, defaultOffX, defaultOffY)
+        local function savePos(key, point, relPoint, x, y)
+            if not point then return end
+            local s = getSettings()
+            s.unlockPos = { point = point, relPoint = relPoint or point, x = x, y = y }
+            local f = frame_fn()
+            if f then
+                f:ClearAllPoints()
+                f:SetPoint(point, UIParent, relPoint or point, x, y)
+            end
+        end
+        local function loadPos()
+            local pos = getSettings().unlockPos
+            if not pos then return nil end
+            return { point = pos.point, relPoint = pos.relPoint or pos.point, x = pos.x, y = pos.y }
+        end
+        local function clearPos()
+            local s = getSettings()
+            s.unlockPos = nil
+            if defaultOffX then s.offsetX = defaultOffX end
+            if defaultOffY then s.offsetY = defaultOffY end
+        end
+        local function applyPos()
+            local s = getSettings()
+            if s.anchorTo and s.anchorTo ~= "none" then return end
+            local pos = s.unlockPos
+            if not pos then return end
+            local f = frame_fn()
+            if f then
+                f:ClearAllPoints()
+                f:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x, pos.y)
+            end
+        end
+        return savePos, loadPos, clearPos, applyPos
+    end
+
+    local function Rebuild() ERB:ApplyAll() end
+    local function LiveMove(key)
+        if RefreshAnchoredBarsForUnlockTarget then RefreshAnchoredBarsForUnlockTarget(key) end
+    end
 
     local elements = {}
 
     -- Health Bar
-    elements[#elements + 1] = {
-        key = "ERB_Health",
-        label = "Health Bar",
-        group = "Resource Bars",
-        order = 500,
-        getFrame = function() return healthBar end,
-        getSize = function()
-            local hp = ERB.db.profile.health
-            return hp.width, hp.height
-        end,
-        getScale = function()
-            return ERB.db.profile.health.scale or 1.0
-        end,
-        savePosition = function(_, point, relPoint, x, y, scale)
-            if not point then return end
-            local hp = ERB.db.profile.health
-            hp.unlockPos = { point = point, relPoint = relPoint or point, x = x, y = y, scale = scale }
-            if scale then hp.scale = scale end
-            if healthBar then
-                if scale then pcall(function() healthBar:SetScale(scale) end) end
-                healthBar:ClearAllPoints()
-                healthBar:SetPoint(point, UIParent, relPoint or point, x, y)
-            end
-        end,
-        loadPosition = function()
-            local pos = ERB.db.profile.health.unlockPos
-            if not pos then return nil end
-            return { point = pos.point, relPoint = pos.relPoint or pos.point, x = pos.x, y = pos.y, scale = pos.scale }
-        end,
-        clearPosition = function()
-            local hp = ERB.db.profile.health
-            hp.unlockPos = nil
-            hp.offsetX = 0; hp.offsetY = -65
-        end,
-        isAnchored = function()
-            local hp = ERB.db.profile.health
-            return hp.anchorTo and hp.anchorTo ~= "none"
-        end,
-        applyPosition = function()
-            local hp = ERB.db.profile.health
-            if hp.anchorTo and hp.anchorTo ~= "none" then return end
-            local pos = hp.unlockPos
-            if not pos then return end
-            if healthBar then
-                local sc = pos.scale or hp.scale or 1
-                pcall(function() healthBar:SetScale(sc) end)
-                healthBar:ClearAllPoints()
-                healthBar:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x, pos.y)
-            end
-        end,
-        onLiveMove = function(key)
-            if RefreshAnchoredBarsForUnlockTarget then RefreshAnchoredBarsForUnlockTarget(key) end
-        end,
-    }
+    do
+        local function S() return ERB.db.profile.health end
+        local save, load, clear, apply = MakePosHelpers(S, function() return healthBar end, 0, -65)
+        elements[#elements + 1] = MK({
+            key = "ERB_Health", label = "Health Bar", group = "Resource Bars", order = 500,
+            getFrame = function() return healthBar end,
+            getSize  = function() local s = S(); return s.width, s.height end,
+            setWidth = function(_, w) S().width = w; Rebuild() end,
+            setHeight = function(_, h) S().height = h; Rebuild() end,
+            isAnchored = function() local s = S(); return s.anchorTo and s.anchorTo ~= "none" end,
+            onLiveMove = LiveMove,
+            savePos = save, loadPos = load, clearPos = clear, applyPos = apply,
+        })
+    end
 
     -- Power Bar
-    elements[#elements + 1] = {
-        key = "ERB_Power",
-        label = "Power Bar",
-        group = "Resource Bars",
-        order = 501,
-        getFrame = function() return primaryBar end,
-        getSize = function()
-            local pp = ERB.db.profile.primary
-            return pp.width, pp.height
-        end,
-        getScale = function()
-            return ERB.db.profile.primary.scale or 1.0
-        end,
-        savePosition = function(_, point, relPoint, x, y, scale)
-            if not point then return end
-            local pp = ERB.db.profile.primary
-            pp.unlockPos = { point = point, relPoint = relPoint or point, x = x, y = y, scale = scale }
-            if scale then pp.scale = scale end
-            if primaryBar then
-                if scale then pcall(function() primaryBar:SetScale(scale) end) end
-                primaryBar:ClearAllPoints()
-                primaryBar:SetPoint(point, UIParent, relPoint or point, x, y)
-            end
-        end,
-        loadPosition = function()
-            local pos = ERB.db.profile.primary.unlockPos
-            if not pos then return nil end
-            return { point = pos.point, relPoint = pos.relPoint or pos.point, x = pos.x, y = pos.y, scale = pos.scale }
-        end,
-        clearPosition = function()
-            local pp = ERB.db.profile.primary
-            pp.unlockPos = nil
-            pp.offsetX = 0; pp.offsetY = -74
-        end,
-        isAnchored = function()
-            local pp = ERB.db.profile.primary
-            return pp.anchorTo and pp.anchorTo ~= "none"
-        end,
-        applyPosition = function()
-            local pp = ERB.db.profile.primary
-            if pp.anchorTo and pp.anchorTo ~= "none" then return end
-            local pos = pp.unlockPos
-            if not pos then return end
-            if primaryBar then
-                local sc = pos.scale or pp.scale or 1
-                pcall(function() primaryBar:SetScale(sc) end)
-                primaryBar:ClearAllPoints()
-                primaryBar:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x, pos.y)
-            end
-        end,
-        onLiveMove = function(key)
-            if RefreshAnchoredBarsForUnlockTarget then RefreshAnchoredBarsForUnlockTarget(key) end
-        end,
-    }
+    do
+        local function S() return ERB.db.profile.primary end
+        local save, load, clear, apply = MakePosHelpers(S, function() return primaryBar end, 0, -74)
+        elements[#elements + 1] = MK({
+            key = "ERB_Power", label = "Power Bar", group = "Resource Bars", order = 501,
+            getFrame = function() return primaryBar end,
+            getSize  = function()
+                local s = S()
+                local h = s.height
+                local expandDelta = 0
+                if s.expandIfNoResource then
+                    local secRes = GetSecondaryResource()
+                    if not secRes then
+                        local sp2 = ERB.db.profile.secondary
+                        expandDelta = sp2 and sp2.pipHeight or 20
+                        h = h + expandDelta
+                    end
+                end
+                -- 3rd return: centerYOff shifts the mover up to match the bar's upward growth
+                return s.width, h, expandDelta * 0.5
+            end,
+            setWidth = function(_, w) S().width = w; Rebuild() end,
+            setHeight = function(_, h) S().height = h; Rebuild() end,
+            isAnchored = function() local s = S(); return s.anchorTo and s.anchorTo ~= "none" end,
+            onLiveMove = LiveMove,
+            savePos = save, loadPos = load, clearPos = clear, applyPos = apply,
+        })
+    end
 
     -- Class Resource (pips/runes)
-    elements[#elements + 1] = {
-        key = "ERB_ClassResource",
-        label = "Class Resource",
-        group = "Resource Bars",
-        order = 502,
-        getFrame = function() return secondaryFrame end,
-        getSize = function()
-            local sp = ERB.db.profile.secondary
-            if cachedSecondary and cachedSecondary.type == "bar" then
-                local totalW = ERB.db.profile.primary.width or 214
-                return totalW, sp.pipHeight
-            end
-            return sp.pipWidth, sp.pipHeight
-        end,
-        getScale = function()
-            return ERB.db.profile.secondary.scale or 1.0
-        end,
-        savePosition = function(_, point, relPoint, x, y, scale)
-            if not point then return end
-            local sp = ERB.db.profile.secondary
-            sp.unlockPos = { point = point, relPoint = relPoint or point, x = x, y = y, scale = scale }
-            if scale then sp.scale = scale end
-            if secondaryFrame then
-                if scale then pcall(function() secondaryFrame:SetScale(scale) end) end
-                secondaryFrame:ClearAllPoints()
-                secondaryFrame:SetPoint(point, UIParent, relPoint or point, x, y)
-            end
-        end,
-        loadPosition = function()
-            local pos = ERB.db.profile.secondary.unlockPos
-            if not pos then return nil end
-            return { point = pos.point, relPoint = pos.relPoint or pos.point, x = pos.x, y = pos.y, scale = pos.scale }
-        end,
-        clearPosition = function()
-            local sp = ERB.db.profile.secondary
-            sp.unlockPos = nil
-            sp.offsetX = 0; sp.offsetY = -38
-        end,
-        isAnchored = function()
-            local sp = ERB.db.profile.secondary
-            return sp.anchorTo and sp.anchorTo ~= "none"
-        end,
-        applyPosition = function()
-            local sp = ERB.db.profile.secondary
-            if sp.anchorTo and sp.anchorTo ~= "none" then return end
-            local pos = sp.unlockPos
-            if not pos then return end
-            if secondaryFrame then
-                local sc = pos.scale or sp.scale or 1
-                pcall(function() secondaryFrame:SetScale(sc) end)
-                secondaryFrame:ClearAllPoints()
-                secondaryFrame:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 0)
-            end
-        end,
-        onLiveMove = function(key)
-            if RefreshAnchoredBarsForUnlockTarget then RefreshAnchoredBarsForUnlockTarget(key) end
-        end,
-    }
+    do
+        local function S() return ERB.db.profile.secondary end
+        local save, load, clear, apply = MakePosHelpers(S, function() return secondaryFrame end, 0, -38)
+        elements[#elements + 1] = MK({
+            key = "ERB_ClassResource", label = "Class Resource", group = "Resource Bars", order = 502,
+            getFrame = function() return secondaryFrame end,
+            getSize  = function()
+                local s = S()
+                if cachedSecondary and cachedSecondary.type == "bar" then
+                    return (ERB.db.profile.primary.width or 214), s.pipHeight
+                end
+                return s.pipWidth, s.pipHeight
+            end,
+            setWidth = function(_, w)
+                local s = S()
+                if cachedSecondary and cachedSecondary.type == "bar" then
+                    ERB.db.profile.primary.width = w
+                else
+                    s.pipWidth = w
+                end
+                Rebuild()
+            end,
+            setHeight = function(_, h) S().pipHeight = h; Rebuild() end,
+            isAnchored = function() local s = S(); return s.anchorTo and s.anchorTo ~= "none" end,
+            onLiveMove = LiveMove,
+            savePos = save, loadPos = load, clearPos = clear, applyPos = apply,
+        })
+    end
 
     -- Cast Bar
-    elements[#elements + 1] = {
-        key = "ERB_CastBar",
-        label = "Cast Bar",
-        group = "Resource Bars",
-        order = 504,
-        getFrame = function() return castBarFrame end,
-        getSize = function()
-            local cb = ERB.db.profile.castBar
-            local iconW = (cb.showIcon ~= false) and cb.height or 0
-            return cb.width + iconW, cb.height
-        end,
-        getScale = function()
-            return ERB.db.profile.castBar.scale or 1.0
-        end,
-        savePosition = function(_, point, relPoint, x, y, scale)
+    do
+        local function S() return ERB.db.profile.castBar end
+        local function castSave(key, point, relPoint, x, y)
             if not point then return end
-            local cb = ERB.db.profile.castBar
-            cb.unlockPos = { point = point, relPoint = relPoint or point, x = x, y = y, scale = scale }
-            if scale then cb.scale = scale end
+            local cb = S()
+            cb.unlockPos = { point = point, relPoint = relPoint or point, x = x, y = y }
             if castBarFrame then
-                if scale then pcall(function() castBarFrame:SetScale(scale) end) end
                 castBarFrame:ClearAllPoints()
                 castBarFrame:SetPoint(point, UIParent, relPoint or point, x, y)
             end
-        end,
-        loadPosition = function()
-            local pos = ERB.db.profile.castBar.unlockPos
+        end
+        local function castLoad()
+            local pos = S().unlockPos
             if not pos then return nil end
-            return { point = pos.point, relPoint = pos.relPoint or pos.point, x = pos.x, y = pos.y, scale = pos.scale }
-        end,
-        clearPosition = function()
-            local cb = ERB.db.profile.castBar
+            return { point = pos.point, relPoint = pos.relPoint or pos.point, x = pos.x, y = pos.y }
+        end
+        local function castClear()
+            local cb = S()
             cb.unlockPos = nil
             cb.anchorX = 0; cb.anchorY = -54
-        end,
-        applyPosition = function()
-            local cb = ERB.db.profile.castBar
-            local pos = cb.unlockPos
+        end
+        local function castApply()
+            local pos = S().unlockPos
             if not pos then return end
             if castBarFrame then
-                local sc = pos.scale or cb.scale or 1
-                pcall(function() castBarFrame:SetScale(sc) end)
                 castBarFrame:ClearAllPoints()
                 castBarFrame:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x, pos.y)
             end
-        end,
-    }
+        end
+        elements[#elements + 1] = MK({
+            key = "ERB_CastBar", label = "Cast Bar", group = "Resource Bars", order = 504,
+            getFrame = function() return castBarFrame end,
+            getSize  = function()
+                local cb = S()
+                local iconW = (cb.showIcon ~= false) and cb.height or 0
+                return cb.width + iconW, cb.height
+            end,
+            setWidth = function(_, w)
+                local cb = S()
+                local iconW = (cb.showIcon ~= false) and cb.height or 0
+                cb.width = math.max(w - iconW, 10)
+                Rebuild()
+            end,
+            setHeight = function(_, h) S().height = h; Rebuild() end,
+            savePos = castSave, loadPos = castLoad, clearPos = castClear, applyPos = castApply,
+        })
+    end
+
     EllesmereUI:RegisterUnlockElements(elements)
 end
 
@@ -1075,7 +1069,7 @@ local function ApplyBarAnchor(frame, anchorKey, anchorPos, offsetX, offsetY, gro
     if frame._erbMouseTrack then
         frame:SetScript("OnUpdate", nil)
         frame._erbMouseTrack = nil
-        frame:SetFrameStrata("LOW")
+        frame:SetFrameStrata("MEDIUM")
         frame:SetFrameLevel(5)
         -- Restore mouse on frame and all children
         SetFrameClickThrough(frame, false)
@@ -1178,11 +1172,10 @@ local function GetAnchorOffsets(settings)
     return offsetX or 0, offsetY or 0
 end
 
-local function ApplyFreeBarPosition(frame, settings, defaultX, defaultY, width, height, scale)
+local function ApplyFreeBarPosition(frame, settings, defaultX, defaultY, width, height)
     if not frame then return end
 
     local pos = settings and settings.unlockPos
-    frame:SetScale(scale or 1)
     frame:SetSize(width, height)
     frame:ClearAllPoints()
 
@@ -1246,6 +1239,59 @@ RefreshAnchoredBarsForUnlockTarget = function(unlockKey)
 end
 
 -------------------------------------------------------------------------------
+--  Resource bar tick marks (bar-type secondary only)
+-------------------------------------------------------------------------------
+
+-- Parse comma-separated tick values string into a table of numbers.
+local function ParseTickValues(str)
+    if not str or str == "" then return nil end
+    local vals = {}
+    for s in str:gmatch("[^,]+") do
+        local n = tonumber(s:match("^%s*(.-)%s*$"))
+        if n and n > 0 then vals[#vals + 1] = n end
+    end
+    if #vals == 0 then return nil end
+    return vals
+end
+
+-- Apply tick marks to the bar-type secondary resource bar.
+-- sb: the StatusBar, maxVal: max resource value, tickStr: comma-separated values,
+-- tickCache: table to store tick textures
+local function ApplyResourceBarTicks(sb, maxVal, tickStr, tickCache)
+    local vals = ParseTickValues(tickStr)
+
+    for i = 1, #tickCache do tickCache[i]:Hide() end
+
+    if not vals or not sb or maxVal <= 0 then return end
+
+    local PP = EllesmereUI and EllesmereUI.PP
+
+    -- Create tick textures as needed
+    while #tickCache < #vals do
+        local t = sb:CreateTexture(nil, "OVERLAY", nil, 7)
+        t:SetColorTexture(1, 1, 1, 1)
+        t:SetSnapToPixelGrid(false)
+        t:SetTexelSnappingBias(0)
+        tickCache[#tickCache + 1] = t
+    end
+
+    local onePx = PP and PP.Scale(1) or 1
+    local barW = sb:GetWidth()
+    local barH = sb:GetHeight()
+    for i, v in ipairs(vals) do
+        if v <= maxVal then
+            local t = tickCache[i]
+            local frac = v / maxVal
+            t:ClearAllPoints()
+            local off = PP and PP.Scale(barW * frac) or (barW * frac)
+            t:SetSize(onePx, barH)
+            t:SetPoint("TOPLEFT", sb, "TOPLEFT", off, 0)
+            t:Show()
+        end
+    end
+end
+
+-------------------------------------------------------------------------------
 --  BuildBars -- applies per-element scale, border, colors, text positioning
 -------------------------------------------------------------------------------
 
@@ -1273,7 +1319,7 @@ local function BuildBars()
         end
     end
 
-    -- Fallback defaults for nil-safe reads (protects against sparse SavedVariables from migration)
+    -- Fallback defaults for nil-safe reads
     local FALLBACK = DEFAULTS.profile
 
     -- Health bar
@@ -1283,22 +1329,22 @@ local function BuildBars()
         if not healthBar then
             healthBar = CreateStatusBar(mainFrame, "ERB_HealthBar", hp.width, hp.height,
                 hp.borderSize, hp.borderR, hp.borderG, hp.borderB, hp.borderA)
+            healthBar:SetFrameStrata("MEDIUM")
+            healthBar:SetFrameLevel(10)
         end
         local healthAnchorKey = NormalizeAnchorKey(hp.anchorTo)
         if healthAnchorKey ~= "none" then
             local ow, oh = OrientedSize(hp.width, hp.height, hpOri)
             local offsetX, offsetY = GetAnchorOffsets(hp)
-            healthBar:SetScale(hp.scale)
             healthBar:SetSize(ow, oh)
             if not ApplyBarAnchor(healthBar, healthAnchorKey, hp.anchorPosition, offsetX, offsetY, hp.growthDirection, hp.growCentered) then
-                ApplyFreeBarPosition(healthBar, hp, 0, -64, ow, oh, hp.scale)
+                ApplyFreeBarPosition(healthBar, hp, 0, -64, ow, oh)
             end
         elseif hp.unlockPos and hp.unlockPos.point then
             -- Position fully managed by unlock mode -- no animations, just apply directly
             local rp = hp.unlockPos.relPoint or hp.unlockPos.point
             local ow, oh = OrientedSize(hp.width, hp.height, hpOri)
             ApplyBarAnchor(healthBar, "none")
-            healthBar:SetScale(hp.scale)
             healthBar:SetSize(ow, oh)
             healthBar:ClearAllPoints()
             healthBar:SetPoint(hp.unlockPos.point, UIParent, rp, hp.unlockPos.x or 0, hp.unlockPos.y or 0)
@@ -1306,7 +1352,6 @@ local function BuildBars()
             -- Clear any mouse-tracking OnUpdate from a previous anchor
             ApplyBarAnchor(healthBar, "none")
             local function ApplyHealthBarTransform()
-                local s = healthBar["_barAnim_scale"] or hp.scale or 1
                 local ox = healthBar["_barAnim_ox"] or hp.offsetX or 0
                 local oy = healthBar["_barAnim_oy"] or hp.offsetY or -64
                 local w = healthBar["_barAnim_w"] or hp.width or 214
@@ -1314,10 +1359,8 @@ local function BuildBars()
                 local ow, oh = OrientedSize(w, h2, hpOri)
                 healthBar:ClearAllPoints()
                 healthBar:SetPoint("CENTER", mainFrame, "CENTER", ox, oy)
-                healthBar:SetScale(s)
                 healthBar:SetSize(ow, oh)
             end
-            SmoothBarAnimate(healthBar, "scale", hp.scale or 1, function() ApplyHealthBarTransform() end)
             SmoothBarAnimate(healthBar, "ox", hp.offsetX or 0, function() ApplyHealthBarTransform() end)
             SmoothBarAnimate(healthBar, "oy", hp.offsetY or -64, function() ApplyHealthBarTransform() end)
             SmoothBarAnimate(healthBar, "w", hp.width or 214, function() ApplyHealthBarTransform() end)
@@ -1360,50 +1403,60 @@ local function BuildBars()
     -- Power bar (primary resource)
     cachedPrimary = GetPrimaryPowerType()
     local pp = p.primary or FALLBACK.primary
+    -- Expand height when spec has no class resource and the option is enabled
+    local ppHeight = pp.height or 14
+    local ppExpandDelta = 0
+    if pp.expandIfNoResource then
+        local secRes = GetSecondaryResource()
+        if not secRes then
+            local sp2 = p.secondary or FALLBACK.secondary
+            ppExpandDelta = sp2.pipHeight or 20
+            ppHeight = ppHeight + ppExpandDelta
+        end
+    end
     if pp.enabled ~= false and cachedPrimary then
         local ppOri = pp.orientation or g.orientation or "HORIZONTAL"
         if not primaryBar then
-            primaryBar = CreateStatusBar(mainFrame, "ERB_PrimaryBar", pp.width, pp.height,
+            primaryBar = CreateStatusBar(mainFrame, "ERB_PrimaryBar", pp.width, ppHeight,
                 pp.borderSize, pp.borderR, pp.borderG, pp.borderB, pp.borderA)
+            primaryBar:SetFrameStrata("MEDIUM")
+            primaryBar:SetFrameLevel(10)
         end
         local primaryAnchorKey = NormalizeAnchorKey(pp.anchorTo)
         if primaryAnchorKey ~= "none" then
-            local ow, oh = OrientedSize(pp.width, pp.height, ppOri)
+            local ow, oh = OrientedSize(pp.width, ppHeight, ppOri)
             local offsetX, offsetY = GetAnchorOffsets(pp)
-            primaryBar:SetScale(pp.scale)
             primaryBar:SetSize(ow, oh)
             if not ApplyBarAnchor(primaryBar, primaryAnchorKey, pp.anchorPosition, offsetX, offsetY, pp.growthDirection, pp.growCentered) then
-                ApplyFreeBarPosition(primaryBar, pp, 0, -54, ow, oh, pp.scale)
+                ApplyFreeBarPosition(primaryBar, pp, 0, -54, ow, oh)
             end
         elseif pp.unlockPos and pp.unlockPos.point then
             -- Position fully managed by unlock mode -- no animations, just apply directly
             local rp = pp.unlockPos.relPoint or pp.unlockPos.point
-            local ow, oh = OrientedSize(pp.width, pp.height, ppOri)
+            local ow, oh = OrientedSize(pp.width, ppHeight, ppOri)
             ApplyBarAnchor(primaryBar, "none")
-            primaryBar:SetScale(pp.scale)
             primaryBar:SetSize(ow, oh)
             primaryBar:ClearAllPoints()
-            primaryBar:SetPoint(pp.unlockPos.point, UIParent, rp, pp.unlockPos.x or 0, pp.unlockPos.y or 0)
+            -- Shift up by expand delta so the bar grows upward (bottom edge stays fixed)
+            primaryBar:SetPoint(pp.unlockPos.point, UIParent, rp, pp.unlockPos.x or 0, (pp.unlockPos.y or 0) + ppExpandDelta)
         else
             -- Clear any mouse-tracking OnUpdate from a previous anchor
             ApplyBarAnchor(primaryBar, "none")
             local function ApplyPowerBarTransform()
-                local s = primaryBar["_barAnim_scale"] or pp.scale or 1
                 local ox = primaryBar["_barAnim_ox"] or pp.offsetX or 0
                 local oy = primaryBar["_barAnim_oy"] or pp.offsetY or -54
                 local w = primaryBar["_barAnim_w"] or pp.width or 214
-                local h2 = primaryBar["_barAnim_h"] or pp.height or 4
+                local h2 = primaryBar["_barAnim_h"] or ppHeight or 4
                 local ow, oh = OrientedSize(w, h2, ppOri)
                 primaryBar:ClearAllPoints()
-                primaryBar:SetPoint("CENTER", mainFrame, "CENTER", ox, oy)
-                primaryBar:SetScale(s)
+                -- Shift up by half the expand delta so growth goes upward from center
+                primaryBar:SetPoint("CENTER", mainFrame, "CENTER", ox, oy + ppExpandDelta * 0.5)
                 primaryBar:SetSize(ow, oh)
             end
-            SmoothBarAnimate(primaryBar, "scale", pp.scale or 1, function() ApplyPowerBarTransform() end)
             SmoothBarAnimate(primaryBar, "ox", pp.offsetX or 0, function() ApplyPowerBarTransform() end)
             SmoothBarAnimate(primaryBar, "oy", pp.offsetY or -54, function() ApplyPowerBarTransform() end)
             SmoothBarAnimate(primaryBar, "w", pp.width or 214, function() ApplyPowerBarTransform() end)
-            SmoothBarAnimate(primaryBar, "h", pp.height or 4, function() ApplyPowerBarTransform() end)
+            SmoothBarAnimate(primaryBar, "h", ppHeight or 4, function() ApplyPowerBarTransform() end)
         end
         primaryBar:ApplyBorder(pp.borderSize, pp.borderR, pp.borderG, pp.borderB, pp.borderA)
 
@@ -1446,6 +1499,8 @@ local function BuildBars()
         if not secondaryFrame then
             secondaryFrame = CreateFrame("Frame", "ERB_SecondaryFrame", mainFrame)
             secondaryFrame:SetClipsChildren(true)
+            secondaryFrame:SetFrameStrata("MEDIUM")
+            secondaryFrame:SetFrameLevel(10)
         end
 
         local maxPts = cachedSecondary.max or 5
@@ -1463,6 +1518,8 @@ local function BuildBars()
             elseif powerType == "WHIRLWIND_STACKS" and EllesmereUI.GetWhirlwindStacks then
                 local _, realMax = EllesmereUI.GetWhirlwindStacks()
                 if realMax and realMax > 0 then maxPts = realMax end
+            elseif powerType == "ICICLES" then
+                maxPts = 5
             end
         end
         local pipH = sp.pipHeight or 20
@@ -1486,31 +1543,26 @@ local function BuildBars()
         local secondaryAnchorKey = NormalizeAnchorKey(sp.anchorTo)
         if secondaryAnchorKey ~= "none" then
             local offsetX, offsetY = GetAnchorOffsets(sp)
-            secondaryFrame:SetScale(sp.scale or 1)
             secondaryFrame:SetSize(frameW, frameH)
             if not ApplyBarAnchor(secondaryFrame, secondaryAnchorKey, sp.anchorPosition, offsetX, offsetY, sp.growthDirection, sp.growCentered) then
-                ApplyFreeBarPosition(secondaryFrame, sp, 0, -38, frameW, frameH, sp.scale or 1)
+                ApplyFreeBarPosition(secondaryFrame, sp, 0, -38, frameW, frameH)
             end
         elseif sp.unlockPos and sp.unlockPos.point then
             ApplyBarAnchor(secondaryFrame, "none")
-            secondaryFrame:SetScale(sp.scale or 1)
             secondaryFrame:SetSize(frameW, frameH)
             secondaryFrame:ClearAllPoints()
             secondaryFrame:SetPoint(sp.unlockPos.point, UIParent, sp.unlockPos.relPoint or sp.unlockPos.point, sp.unlockPos.x or 0, sp.unlockPos.y or 0)
         else
             ApplyBarAnchor(secondaryFrame, "none")
             local function ApplySecondaryBarTransform()
-                local s  = secondaryFrame["_barAnim_scale"] or sp.scale or 1
                 local ox = secondaryFrame["_barAnim_ox"] or sp.offsetX or 0
                 local oy = secondaryFrame["_barAnim_oy"] or sp.offsetY or -38
                 local w  = secondaryFrame["_barAnim_w"] or frameW
                 local h2 = secondaryFrame["_barAnim_h"] or frameH
                 secondaryFrame:ClearAllPoints()
                 secondaryFrame:SetPoint("CENTER", mainFrame, "CENTER", ox, oy)
-                secondaryFrame:SetScale(s)
                 secondaryFrame:SetSize(w, h2)
             end
-            SmoothBarAnimate(secondaryFrame, "scale", sp.scale or 1, function() ApplySecondaryBarTransform() end)
             SmoothBarAnimate(secondaryFrame, "ox", sp.offsetX or 0, function() ApplySecondaryBarTransform() end)
             SmoothBarAnimate(secondaryFrame, "oy", sp.offsetY or -38, function() ApplySecondaryBarTransform() end)
             SmoothBarAnimate(secondaryFrame, "w", frameW, function() ApplySecondaryBarTransform() end)
@@ -1546,7 +1598,9 @@ local function BuildBars()
                 secondaryBar._bg:SetColorTexture(DARK_BG_R, DARK_BG_G, DARK_BG_B, DARK_BG_A)
             elseif sp.classColored ~= false then
                 -- classColored is true (default) -- use class color, or power color if no class color
-                local cc = CLASS_COLORS[cachedClass]
+                -- BM/MM hunter Focus bar: always use power color (not class color)
+                local usePower = (cachedSecondary.power == "FOCUS_BAR")
+                local cc = not usePower and CLASS_COLORS[cachedClass] or nil
                 if cc then
                     secondaryBar:GetStatusBarTexture():SetVertexColor(cc[1], cc[2], cc[3], sp.fillA or 1)
                 elseif pc then
@@ -1559,6 +1613,7 @@ local function BuildBars()
                 secondaryBar._bg:SetColorTexture(sp.bgR, sp.bgG, sp.bgB, sp.bgA)
             end
             secondaryBar:ApplyBorder(0, 0, 0, 0, 0)
+            ApplyResourceBarTicks(secondaryBar, maxPts, sp.tickValues, secondaryBarTicks)
             secondaryBar:Show()
         elseif cachedSecondary.type == "runes" then
             local numPips = 6
@@ -1611,6 +1666,7 @@ local function BuildBars()
             end
             for i = 7, #pips do if pips[i] then pips[i]:Hide() end end
             if secondaryBar then secondaryBar:Hide() end
+            for i = 1, #secondaryBarTicks do secondaryBarTicks[i]:Hide() end
         else
             local slots = CalcPipGeometry(totalW, maxPts, pipSp, secondaryFrame)
             for i = 1, maxPts do
@@ -1657,6 +1713,7 @@ local function BuildBars()
             for i = maxPts + 1, #pips do if pips[i] then pips[i]:Hide() end end
             for i = 1, #runeFrames do if runeFrames[i] then runeFrames[i]:Hide() end end
             if secondaryBar then secondaryBar:Hide() end
+            for i = 1, #secondaryBarTicks do secondaryBarTicks[i]:Hide() end
         end
 
         -- Full-bar border (wraps the entire class resource bar)
@@ -1899,8 +1956,11 @@ local function UpdateSecondaryResource()
         r, g, b = DARK_FILL_R, DARK_FILL_G, DARK_FILL_B
     elseif sp.classColored ~= false then
         -- classColored is true (default) -- use class color
-        local cc = CLASS_COLORS[cachedClass]
-        if cc then r, g, b = cc[1], cc[2], cc[3] end
+        -- BM/MM hunter Focus bar: always use power color (not class color)
+        local usePower = (powerType == "FOCUS_BAR")
+        local cc = not usePower and CLASS_COLORS[cachedClass] or nil
+        if cc then r, g, b = cc[1], cc[2], cc[3]
+        elseif pc then r, g, b = pc[1], pc[2], pc[3] end
         a = sp.fillA or 1
     else
         -- classColored explicitly false -- custom fill
@@ -2049,6 +2109,11 @@ local function UpdateSecondaryResource()
                 maxC = UnitPowerMax("player", PT.FOCUS) or maxPts
                 if issecretvalue and issecretvalue(maxC) then maxC = maxPts end
                 if maxC <= 0 then maxC = maxPts end
+            elseif powerType == "LUNAR_POWER_BAR" then
+                cur = UnitPower("player", PT.LUNAR_POWER) or 0
+                maxC = UnitPowerMax("player", PT.LUNAR_POWER) or maxPts
+                if issecretvalue and issecretvalue(maxC) then maxC = maxPts end
+                if maxC <= 0 then maxC = maxPts end
             elseif powerType == "BREWMASTER_STAGGER" then
                 cur = UnitStagger("player") or 0
                 maxC = UnitHealthMax("player") or 1
@@ -2082,6 +2147,7 @@ local function UpdateSecondaryResource()
                     local pType = (powerType == "MAELSTROM_BAR") and PT.MAELSTROM
                                or (powerType == "INSANITY_BAR") and PT.INSANITY
                                or (powerType == "FOCUS_BAR") and PT.FOCUS
+                               or (powerType == "LUNAR_POWER_BAR") and PT.LUNAR_POWER
                                or nil
                     if sp.thresholdEnabled and pType and UnitPowerPercent then
                         -- Use ColorCurve + UnitPowerPercent: WoW evaluates the secret
@@ -2147,6 +2213,13 @@ local function UpdateSecondaryResource()
                         else
                             secondaryFrame._countText:SetText(tostring(cur))
                         end
+                    elseif powerType == "LUNAR_POWER_BAR" then
+                        local pct = UnitPowerPercent and UnitPowerPercent("player", PT.LUNAR_POWER) or 0
+                        if not issecretvalue(pct) then
+                            secondaryFrame._countText:SetText(format("%d", pct) .. "%")
+                        else
+                            secondaryFrame._countText:SetText(tostring(cur))
+                        end
                     else
                         secondaryFrame._countText:SetText(tostring(cur))
                     end
@@ -2178,6 +2251,9 @@ local function UpdateSecondaryResource()
                 for i = 1, #pips do if pips[i] then pips[i]:Hide() end end
                 return
             end
+        elseif powerType == "ICICLES" then
+            cur = GetIcicleCount()
+            maxC = 5
         end
         -- Use custom resource color from EllesmereUI if available
         local _, classFile = UnitClass("player")
@@ -2247,6 +2323,17 @@ local function UpdateSecondaryResource()
         local useThresh = sp.thresholdEnabled and cur >= sp.thresholdCount
         local tr, tg, tb = sp.thresholdR, sp.thresholdG, sp.thresholdB
 
+        -- Fractional resource detection (e.g. Destro warlock soul shards)
+        local frac = 0
+        local preciseCur = cur
+        if powerType == PT.SOUL_SHARDS then
+            local raw = UnitPower("player", powerType, true)
+            if raw and (not issecretvalue or not issecretvalue(raw)) then
+                preciseCur = raw / 10
+                frac = preciseCur - cur
+            end
+        end
+
         -- Charged combo points (e.g. Supercharger talent)
         local chargedSet
         if powerType == PT.COMBO then
@@ -2279,11 +2366,39 @@ local function UpdateSecondaryResource()
                 else
                     pips[i]:SetActive(active, r, g, b, a)
                 end
+                -- Hide any leftover partial-fill overlay on non-fractional pips
+                if pips[i]._rechargeBar then pips[i]._rechargeBar:Hide() end
             end
         end
+
+        -- Partial pip fill for fractional resources (reuses DK rune recharge pattern)
+        if frac > 0 and cur < maxPts and pips[cur + 1] and pips[cur + 1]:IsShown() then
+            local nextPip = pips[cur + 1]
+            if not nextPip._rechargeBar then
+                local sb = CreateFrame("StatusBar", nil, nextPip)
+                sb:SetAllPoints(nextPip)
+                sb:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+                sb:SetFrameLevel(nextPip:GetFrameLevel())
+                sb:SetMinMaxValues(0, 1)
+                if nextPip._texKey then
+                    local texLookup = _G._ERB_BarTextures
+                    local path = texLookup and texLookup[nextPip._texKey]
+                    if path then sb:SetStatusBarTexture(path) end
+                end
+                nextPip._rechargeBar = sb
+            end
+            nextPip._rechargeBar:SetValue(frac)
+            nextPip._rechargeBar:SetStatusBarColor(r * 0.5, g * 0.5, b * 0.5, a)
+            nextPip._rechargeBar:Show()
+        end
+
         -- Count text
         if sp.showText and secondaryFrame._countText then
-            secondaryFrame._countText:SetText(tostring(cur))
+            if frac > 0 then
+                secondaryFrame._countText:SetText(format("%.1f", preciseCur))
+            else
+                secondaryFrame._countText:SetText(tostring(cur))
+            end
         end
     end
 end
@@ -2300,6 +2415,7 @@ local function ShouldShowSecondary()
     if vis == "always" then return true end
     if vis == "never" then return false end
     if vis == "combat" or vis == "in_combat" then return isInCombat end
+    if vis == "out_of_combat" then return not isInCombat end
     if vis == "target" then return UnitExists("target") and UnitCanAttack("player", "target") end
     if vis == "in_raid" then return IsInRaid and IsInRaid() or false end
     if vis == "in_party" then
@@ -2319,6 +2435,7 @@ local function ShouldShowBar(barProfile)
     if vis == "always" then return true end
     if vis == "never" then return false end
     if vis == "combat" or vis == "in_combat" then return isInCombat end
+    if vis == "out_of_combat" then return not isInCombat end
     if vis == "target" then return UnitExists("target") and UnitCanAttack("player", "target") end
     if vis == "in_raid" then return IsInRaid and IsInRaid() or false end
     if vis == "in_party" then
@@ -2749,7 +2866,6 @@ BuildCastBar = function()
         local function ApplyCastUnlockTransform()
             local aw = castBarFrame["_barAnim_w"] or totalW
             local ah = castBarFrame["_barAnim_h"] or h
-            castBarFrame:SetScale(cb.scale or 1)
             castBarFrame:SetSize(aw, ah)
             castBarFrame:ClearAllPoints()
             castBarFrame:SetPoint(cb.unlockPos.point, UIParent, rp, px, py)
@@ -2757,7 +2873,6 @@ BuildCastBar = function()
         SmoothBarAnimate(castBarFrame, "w", totalW, function() ApplyCastUnlockTransform() end)
         SmoothBarAnimate(castBarFrame, "h", h, function() ApplyCastUnlockTransform() end)
     else
-        castBarFrame:SetScale(cb.scale or 1)
         castBarFrame:SetSize(totalW, h)
         castBarFrame:ClearAllPoints()
         castBarFrame:SetPoint("CENTER", UIParent, "CENTER", cb.anchorX, cb.anchorY)
@@ -3597,32 +3712,12 @@ end
 function ERB:OnInitialize()
     self.db = EllesmereUI.Lite.NewDB("EllesmereUIResourceBarsDB", DEFAULTS, true)
 
-    -- One-time migration from AceDB to Lite: reset the profile to ensure
-    -- all defaults are properly applied.  AceDB used metatables for defaults
-    -- which left the raw SavedVariables sparse; Lite writes defaults directly.
-    -- This flag persists in the SV root so it only fires once per character.
-    local sv = _G["EllesmereUIResourceBarsDB"]
-    if sv and not sv._liteMigrated then
-        self.db:ResetProfile()
-        sv._liteMigrated = true
-    end
-
     _G._ERB_AceDB = self.db
     _G._ERB_Apply = function() ERB:ApplyAll() end
     _G._ERB_GetSecondaryResource = GetSecondaryResource
+    _G._ERB_CalcPipGeometry = CalcPipGeometry
     _G._ERB_GetPrimaryPowerType = GetPrimaryPowerType
     _G._ERB_PowerColors = POWER_COLORS
-
-    -- Migrate old visibility values: "combat" -> "in_combat", "target" stays as-is
-    do
-        local prof = self.db.profile
-        for _, key in ipairs({"health", "primary", "secondary"}) do
-            local s = prof[key]
-            if s and s.visibility == "combat" then
-                s.visibility = "in_combat"
-            end
-        end
-    end
 
     AppendSharedMediaTextures()
 end

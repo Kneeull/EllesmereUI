@@ -1,4 +1,4 @@
-﻿-------------------------------------------------------------------------------
+-------------------------------------------------------------------------------
 --  EllesmereUICooldownManager_Options.lua
 --  Registers CDM Effects module with EllesmereUI
 --  Tab 1: CDM Bars  |  Tab 2: Bar Glows  |  Tab 3: Buff Bars  |  Tab 4: Unlock Mode
@@ -364,13 +364,22 @@ initFrame:SetScript("OnEvent", function(self)
                 else
                     -- Add with defaults
                     assignedSet[sp.spellID] = true
-                    buffList[#buffList + 1] = {
+                    local newEntry = {
                         spellID = sp.spellID,
                         glowStyle = 1,
                         glowColor = { r = 1, g = 0.82, b = 0.1 },
                         classColor = false,
                         mode = "ACTIVE",
                     }
+                    local prefix = BAR_BUTTON_PREFIXES[barIdx]
+                    local realBtn = prefix and _G[prefix .. btnIdx]
+                    if realBtn and realBtn.action then
+                        local aType, aID = GetActionInfo(realBtn.action)
+                        if aType == "spell" and aID then
+                            newEntry.actionSpellID = aID
+                        end
+                    end
+                    buffList[#buffList + 1] = newEntry
                     UpdateCB()
                     bg.assignments[assignKey] = buffList
                     Refresh()
@@ -580,15 +589,14 @@ initFrame:SetScript("OnEvent", function(self)
             if realBtnW < 1 then realBtnW = 36 end
             if realBtnH < 1 then realBtnH = 36 end
 
-            -- Read bar scale
-            local barScale = (barSettings and barSettings.barScale) or 1.0
-            local scaledBtnW = math.floor(realBtnW * barScale + 0.5)
-            local scaledBtnH = math.floor(realBtnH * barScale + 0.5)
+            -- Read bar size (no scale -- width/height based)
+            local scaledBtnW = math.floor(realBtnW + 0.5)
+            local scaledBtnH = math.floor(realBtnH + 0.5)
 
             -- Custom shape expansion
             local btnShape = (barSettings and barSettings.buttonShape) or "none"
             if btnShape ~= "none" and btnShape ~= "cropped" then
-                local shapeExp = math.floor(10 * barScale + 0.5)
+                local shapeExp = 10
                 scaledBtnW = scaledBtnW + shapeExp
                 scaledBtnH = scaledBtnH + shapeExp
             end
@@ -597,7 +605,7 @@ initFrame:SetScript("OnEvent", function(self)
             end
 
             local spacing = (barSettings and barSettings.buttonPadding) or 2
-            local scaledPad = math.floor(spacing * barScale + 0.5)
+            local scaledPad = spacing
 
             -- How many buttons visible
             local numVisible = NUM_BUTTONS
@@ -1487,7 +1495,12 @@ initFrame:SetScript("OnEvent", function(self)
             mH = mH + ITEM_H
         end
 
-        for _, entry in ipairs(popular) do MakePopularItem(entry) end
+        local _, _tbbPClass = UnitClass("player")
+        for _, entry in ipairs(popular) do
+            if not entry.class or entry.class == _tbbPClass then
+                MakePopularItem(entry)
+            end
+        end
 
         -- Divider before CDM-tracked buffs (only if there are any)
         if #tracked > 0 or #untracked > 0 then
@@ -2789,6 +2802,7 @@ initFrame:SetScript("OnEvent", function(self)
     -- Active state preview on first icon
     local _cdmActivePreviewOn = false
     local _cdmActivePreviewOverlay = nil  -- glow overlay frame on first preview slot
+    local _cdmActivePreviewToken = 0     -- incremented each start to invalidate stale timers
 
     local function StopActiveStatePreview()
         if _cdmActivePreviewOverlay then
@@ -2806,6 +2820,8 @@ initFrame:SetScript("OnEvent", function(self)
 
     local function StartActiveStatePreview()
         if not _cdmActivePreviewOn then return end
+        _cdmActivePreviewToken = _cdmActivePreviewToken + 1
+        local myToken = _cdmActivePreviewToken
         local bd = SelectedCDMBar()
         if not bd then return end
         local anim = bd.activeStateAnim or "blizzard"
@@ -2841,12 +2857,10 @@ initFrame:SetScript("OnEvent", function(self)
             end
         end)
 
-        -- Ensure glow overlay exists (extended 3px like real icons)
+        -- Ensure glow overlay exists
         if not slot._glowOverlay then
             local ov = CreateFrame("Frame", nil, slot)
-            ov:ClearAllPoints()
-            ov:SetPoint("TOPLEFT",     slot, "TOPLEFT",     -3,  3)
-            ov:SetPoint("BOTTOMRIGHT", slot, "BOTTOMRIGHT",  3, -3)
+            ov:SetAllPoints(slot)
             ov:SetFrameLevel(slot:GetFrameLevel() + 3)
             ov:SetAlpha(0)
             slot._glowOverlay = ov
@@ -2887,6 +2901,7 @@ initFrame:SetScript("OnEvent", function(self)
 
         -- Auto-stop glow after preview duration ends
         C_Timer.After(PREVIEW_DURATION, function()
+            if myToken ~= _cdmActivePreviewToken then return end
             if _cdmActivePreviewOverlay then
                 ns.StopNativeGlow(_cdmActivePreviewOverlay)
             end
@@ -3933,6 +3948,9 @@ initFrame:SetScript("OnEvent", function(self)
                 if bd and bd.customSpells then
                     for _, sid in ipairs(bd.customSpells) do alreadyTracked[sid] = true end
                 end
+                if bd and bd.extraSpells then
+                    for _, sid in ipairs(bd.extraSpells) do alreadyTracked[sid] = true end
+                end
 
                 if not _presetsSub then
                     _presetsSub = CreateFrame("Frame", nil, UIParent)
@@ -3967,8 +3985,10 @@ initFrame:SetScript("OnEvent", function(self)
                 subInner:SetPoint("TOPLEFT")
 
                 local subH = 4
+                local _, _pClass = UnitClass("player")
 
                 for _, preset in ipairs(ns.BUFF_BAR_PRESETS) do
+                    if not preset.class or preset.class == _pClass then
                     local primaryID = preset.spellIDs[1]
                     local isAdded = alreadyTracked[primaryID]
 
@@ -4025,6 +4045,7 @@ initFrame:SetScript("OnEvent", function(self)
                     end
 
                     subH = subH + SUB_ITEM_H
+                    end -- class filter
                 end
 
                 local totalSubH = subH + 4
@@ -4477,14 +4498,14 @@ initFrame:SetScript("OnEvent", function(self)
                     if i ~= fromIdx and math.abs(localX - slotCX) < zone then
                         return "swap", i
                     elseif localX < slotCX then
-                        -- Cursor is in the left half of this slot — insert before it logically
+                        -- Cursor is in the left half of this slot � insert before it logically
                         if growLeft then
                             return "insert", i + 1
                         else
                             return "insert", i
                         end
                     else
-                        -- Cursor is in the right half of this slot — insert after it logically
+                        -- Cursor is in the right half of this slot � insert after it logically
                         if growLeft then
                             return "insert", i
                         else
@@ -4693,7 +4714,7 @@ initFrame:SetScript("OnEvent", function(self)
             local sEdges = {}
             local PP = EllesmereUI and EllesmereUI.PP
             if PP then PP.CreateBorder(slot, 0, 0, 0, 1, 1, "OVERLAY", 7) end
-            slot._edges = sEdges  -- kept empty for compat; borders managed by PP
+            slot._edges = sEdges  -- empty; borders managed by PP
 
             -- Hover highlight (2px accent border, child container avoids conflict with existing PP border)
             local eg = EllesmereUI.ELLESMERE_GREEN
@@ -5229,6 +5250,8 @@ initFrame:SetScript("OnEvent", function(self)
                 totalH = (numRows * iconH) + ((numRows - 1) * spacing)
             end
 
+            -- CDM preview: no scale-to-fit — SetClipsChildren on the content
+            -- header clips any overflow so icon scale remains accurate.
             local curParentW = (parent:GetWidth() - PAD * 2) / previewScale
             if curParentW > 0 then
                 self:SetWidth(curParentW)
@@ -5423,8 +5446,14 @@ initFrame:SetScript("OnEvent", function(self)
                 end
 
                 if i <= count then
+                    -- DISABLED: click-to-track feature temporarily disabled
+                    -- Untracked overlay for preview
+                    if slot._untrackedOverlay then
+                        slot._untrackedOverlay:Hide()
+                    end
                     slot:Show()
                 else
+                    if slot._untrackedOverlay then slot._untrackedOverlay:Hide() end
                     slot:Hide()
                 end
             end
@@ -5591,7 +5620,7 @@ initFrame:SetScript("OnEvent", function(self)
             local function UpdateDDLabel()
                 local bd = bars[selectedCDMBarIndex]
                 local label = bd and (bd.name or bd.key) or ""
-                -- Clean up legacy verbose names for display
+                -- Normalize verbose bar names for display
                 if bd and bd.barType == "misc" then
                     label = label:gsub("Custom ", ""):gsub("Trinkets/Racials/Potions Bar ", "Miscellaneous "):gsub("Trinkets Bar ", "Miscellaneous "):gsub("^Trinkets ", "Miscellaneous ")
                 end
@@ -5636,7 +5665,7 @@ initFrame:SetScript("OnEvent", function(self)
                     iLbl:SetWordWrap(false); iLbl:SetMaxLines(1)
                     iLbl:SetPoint("LEFT", item, "LEFT", 10, 0)
                     local displayName = b.name or b.key
-                    -- Clean up legacy verbose names for display
+                    -- Normalize verbose bar names for display
                     if b.barType == "misc" then
                         displayName = displayName:gsub("Custom ", ""):gsub("Trinkets/Racials/Potions Bar ", "Miscellaneous "):gsub("Trinkets Bar ", "Miscellaneous "):gsub("^Trinkets ", "Miscellaneous ")
                     end
@@ -5855,6 +5884,23 @@ initFrame:SetScript("OnEvent", function(self)
         -------------------------------------------------------------------
         parent._showRowDivider = true
 
+        if barData.key == "buffs" then
+            --[[ DISABLED: Use Blizzard Buff Bar feature temporarily removed
+            _, h = W:Toggle(parent, "Use Blizzard Buff Bar", y,
+                function() return DB().cdmBars.useBlizzardBuffBars == true end,
+                function(v)
+                    DB().cdmBars.useBlizzardBuffBars = v
+                    ns.BuildAllCDMBars()
+                    EllesmereUI:RefreshPage(true)
+                end
+            );  y = y - h
+
+            if DB().cdmBars.useBlizzardBuffBars then
+                return math.abs(y)
+            end
+            --]]
+        end
+
         -------------------------------------------------------------------
         --  BAR LAYOUT
         -------------------------------------------------------------------
@@ -5950,7 +5996,51 @@ initFrame:SetScript("OnEvent", function(self)
             })
         end
 
-        -- Row 2: Bar Opacity | Show Tooltip on Hover
+        -- Row 2: Anchor to Cursor | Cursor Position (cog: X + Y)
+        local cursorRow
+        cursorRow, h = W:DualRow(parent, y,
+            { type="toggle", text="Anchor to Cursor",
+              getValue=function() return BD().anchorTo == "mouse" end,
+              setValue=function(v)
+                  BD().anchorTo = v and "mouse" or "none"
+                  ns.BuildAllCDMBars(); ns.RegisterCDMUnlockElements()
+                  Refresh(); EllesmereUI:RefreshPage(true)
+              end },
+            { type="dropdown", text="Cursor Position",
+              values={ left="Left", right="Right", top="Top", bottom="Bottom" },
+              order={ "left", "right", "top", "bottom" },
+              disabled=function() return BD().anchorTo ~= "mouse" end,
+              disabledTooltip=EllesmereUI.DisabledTooltip("Anchor to Cursor"),
+              getValue=function() return BD().anchorPosition or "right" end,
+              setValue=function(v)
+                  BD().anchorPosition = v
+                  ns.BuildAllCDMBars(); Refresh()
+              end });  y = y - h
+
+        -- Inline cog on Cursor Position (right) — X + Y offsets
+        do
+            local rightRgn = cursorRow._rightRegion
+            local _, cursorCogShow = EllesmereUI.BuildCogPopup({
+                title = "Cursor Offset",
+                rows = {
+                    { type="slider", label="X Offset", min=-125, max=125, step=1,
+                      get=function() return BD().anchorOffsetX or 0 end,
+                      set=function(v)
+                          BD().anchorOffsetX = v
+                          ns.BuildAllCDMBars(); Refresh()
+                      end },
+                    { type="slider", label="Y Offset", min=-125, max=125, step=1,
+                      get=function() return BD().anchorOffsetY or 0 end,
+                      set=function(v)
+                          BD().anchorOffsetY = v
+                          ns.BuildAllCDMBars(); Refresh()
+                      end },
+                },
+            })
+            MakeCogBtn(rightRgn, cursorCogShow)
+        end
+
+        -- Row 3: Bar Opacity | Show Tooltip on Hover
         local opacityRow
         opacityRow, h = W:DualRow(parent, y,
             { type="slider", text="Bar Opacity",
@@ -6024,7 +6114,9 @@ initFrame:SetScript("OnEvent", function(self)
               getValue=function() return BD().numRows or 1 end,
               setValue=function(v)
                   BD().numRows = v
+                  if v ~= 2 then BD().topRowCount = nil end
                   ns.BuildAllCDMBars(); Refresh(); UpdateCDMPreviewAndResize()
+                  EllesmereUI:RefreshPage()
               end },
             { type="toggle", text="Vertical Orientation",
               getValue=function() return BD().verticalOrientation end,
@@ -6034,147 +6126,34 @@ initFrame:SetScript("OnEvent", function(self)
                   ns.BuildAllCDMBars(); Refresh(); UpdateCDMPreviewAndResize()
               end });  y = y - h
 
-        -- Row 3: Anchored To | Anchor Position (cog: Growth + X + Y)
-        local _erbLoaded = C_AddOns and C_AddOns.IsAddOnLoaded and C_AddOns.IsAddOnLoaded("EllesmereUIResourceBars")
-        local ERB_ANCHOR_KEYS = { erb_castbar = true, erb_powerbar = true, erb_classresource = true }
-        local function GetAnchorChoices()
-            local vals, order = { none = "None" }, { "none" }
-            local p = DB()
-            if p and p.cdmBars and p.cdmBars.bars then
-                for _, b in ipairs(p.cdmBars.bars) do
-                    if b.key ~= barKey then
-                        local label = b.name or b.key
-                        label = label:gsub("Custom ", ""):gsub("Trinkets/Racials/Potions", "Miscellaneous"):gsub(" Bar ", " ")
-                        vals[b.key] = label
-                        order[#order + 1] = b.key
-                    end
-                end
-            end
-            order[#order + 1] = "---"
-            vals.mouse = "Mouse Cursor"; order[#order + 1] = "mouse"
-            vals.partyframe = "Party Frame"; order[#order + 1] = "partyframe"
-            vals.playerframe = "Player Frame"; order[#order + 1] = "playerframe"
-            vals.erb_castbar = "Cast Bar"; order[#order + 1] = "erb_castbar"
-            vals.erb_powerbar = "Power Bar"; order[#order + 1] = "erb_powerbar"
-            vals.erb_classresource = "Class Resource Bar"; order[#order + 1] = "erb_classresource"
-            return vals, order
-        end
-        local anchorVals, anchorOrder = GetAnchorChoices()
-        local isPartyAnchor = function() return BD().anchorTo == "partyframe" end
-        local isPlayerFrameAnchor = function() return BD().anchorTo == "playerframe" end
-        local isERBAnchor = function() return ERB_ANCHOR_KEYS[BD().anchorTo] end
-        local row3AnchorFrame
-        row3AnchorFrame, h = W:DualRow(parent, y,
-            { type="dropdown", text="Anchored To",
-              values=anchorVals, order=anchorOrder,
-              disabledValues=function(key)
-                  if ERB_ANCHOR_KEYS[key] and not _erbLoaded then
-                      return "This option requires EllesmereUI Resource Bars addon to be enabled"
-                  end
-                  local p = DB()
-                  if p and p.cdmBars and p.cdmBars.bars and key ~= "none" and key ~= "partyframe" and key ~= "playerframe" and key ~= "mouse" and not ERB_ANCHOR_KEYS[key] then
-                      local visited = { [barKey] = true }
-                      local check = key
-                      while check and check ~= "none" and check ~= "partyframe" and check ~= "playerframe" and not ERB_ANCHOR_KEYS[check] do
-                          if visited[check] then return "This would create a circular anchor chain" end
-                          visited[check] = true
-                          local found = false
-                          for _, b in ipairs(p.cdmBars.bars) do
-                              if b.key == check then check = b.anchorTo; found = true; break end
+        -- Row 3b: Top Row Icons (only when numRows == 2)
+        if (BD().numRows or 1) == 2 then
+            _, h = W:DualRow(parent, y,
+                { type="slider", text="Top Row Icons",
+                  tooltip="How many icons to show on the top row. The rest go on the bottom row.",
+                  min=1, max=50, step=1,
+                  getValue=function()
+                      local bd = BD()
+                      if bd.topRowCount and bd.topRowCount > 0 then return bd.topRowCount end
+                      -- Auto: count visible spells and compute default
+                      local count = 0
+                      if bd.customSpells then
+                          for _, sid in ipairs(bd.customSpells) do if sid and sid ~= 0 then count = count + 1 end end
+                      elseif bd.trackedSpells then
+                          for _, sid in ipairs(bd.trackedSpells) do if sid and sid ~= 0 then count = count + 1 end end
+                          if bd.extraSpells then
+                              for _, sid in ipairs(bd.extraSpells) do if sid and sid ~= 0 then count = count + 1 end end
                           end
-                          if not found then break end
                       end
-                  end
-              end,
-              getValue=function() return BD().anchorTo or "none" end,
-              setValue=function(v)
-                  BD().anchorTo = v
-                  ns.BuildAllCDMBars(); ns.RegisterCDMUnlockElements(); Refresh()
-              end },
-            { type="dropdown", text="Anchor Position",
-              values={ left="Left", right="Right", top="Top", bottom="Bottom" },
-              order={ "left", "right", "top", "bottom" },
-              disabled=function() local a = BD().anchorTo or "none"; return a == "none" end,
-              disabledTooltip=EllesmereUI.DisabledTooltip("Anchored To"),
-              getValue=function()
-                  if isPartyAnchor() then return (BD().partyFrameSide or "LEFT"):lower() end
-                  if isPlayerFrameAnchor() then return (BD().playerFrameSide or "LEFT"):lower() end
-                  return BD().anchorPosition or "left"
-              end,
-              setValue=function(v)
-                  if isPartyAnchor() then BD().partyFrameSide = v:upper()
-                  elseif isPlayerFrameAnchor() then BD().playerFrameSide = v:upper()
-                  else BD().anchorPosition = v end
-                  ns.BuildAllCDMBars(); Refresh()
-              end });  y = y - h
-
-        -- Inline cog on Anchor Position (DIRECTIONS icon) Growth + X + Y
-        do
-            local posRgn = row3AnchorFrame._rightRegion
-            local _, posCogShow = EllesmereUI.BuildCogPopup({
-                title = "Anchor Settings",
-                rows = {
-                    { type="dropdown", label="Growth Direction",
-                      values=growValues, order=growOrder,
-                      disabled=function() return (BD().anchorTo or "none") == "mouse" end,
-                      disabledTooltip=EllesmereUI.DisabledTooltip("Not available for Mouse Cursor anchor"),
-                      get=function() return BD().growDirection or "RIGHT" end,
-                      set=function(v)
-                          BD().growDirection = v
-                          ns.BuildAllCDMBars(); Refresh(); UpdateCDMPreviewAndResize()
-                      end },
-                    { type="toggle", label="Grow Centered",
-                      disabled=function() return (BD().anchorTo or "none") == "mouse" end,
-                      disabledTooltip=EllesmereUI.DisabledTooltip("Not available for Mouse Cursor anchor"),
-                      get=function() return BD().growCentered ~= false end,
-                      set=function(v)
-                          BD().growCentered = v
-                          ns.BuildAllCDMBars(); Refresh()
-                      end },
-                    { type="slider", label="X Offset", min=-125, max=125, step=1,
-                      get=function()
-                          if isPartyAnchor() then return BD().partyFrameOffsetX or 0
-                          elseif isPlayerFrameAnchor() then return BD().playerFrameOffsetX or 0
-                          else return BD().anchorOffsetX or 0 end
-                      end,
-                      set=function(v)
-                          if isPartyAnchor() then BD().partyFrameOffsetX = v
-                          elseif isPlayerFrameAnchor() then BD().playerFrameOffsetX = v
-                          else BD().anchorOffsetX = v end
-                          ns.BuildAllCDMBars(); Refresh()
-                      end },
-                    { type="slider", label="Y Offset", min=-125, max=125, step=1,
-                      get=function()
-                          if isPartyAnchor() then return BD().partyFrameOffsetY or 0
-                          elseif isPlayerFrameAnchor() then return BD().playerFrameOffsetY or 0
-                          else return BD().anchorOffsetY or 0 end
-                      end,
-                      set=function(v)
-                          if isPartyAnchor() then BD().partyFrameOffsetY = v
-                          elseif isPlayerFrameAnchor() then BD().playerFrameOffsetY = v
-                          else BD().anchorOffsetY = v end
-                          ns.BuildAllCDMBars(); Refresh()
-                      end },
-                },
-            })
-            local cogBtn = MakeCogBtn(posRgn, posCogShow, nil, EllesmereUI.DIRECTIONS_ICON)
-            local function UpdateAnchorCogState()
-                if (BD().anchorTo or "none") == "none" then
-                    cogBtn:SetAlpha(0.15); cogBtn:Disable()
-                else
-                    cogBtn:SetAlpha(0.4); cogBtn:Enable()
-                end
-            end
-            cogBtn:SetScript("OnEnter", function(self)
-                if (BD().anchorTo or "none") ~= "none" then self:SetAlpha(0.7)
-                else EllesmereUI.ShowWidgetTooltip(self, EllesmereUI.DisabledTooltip("Anchored To")) end
-            end)
-            cogBtn:SetScript("OnLeave", function(self)
-                UpdateAnchorCogState(); EllesmereUI.HideWidgetTooltip()
-            end)
-            cogBtn:SetScript("OnClick", function(self) posCogShow(self) end)
-            UpdateAnchorCogState()
-            EllesmereUI.RegisterWidgetRefresh(UpdateAnchorCogState)
+                      if count == 0 then return 1 end
+                      return math.ceil(count / 2)
+                  end,
+                  setValue=function(v)
+                      if v == 0 then v = nil end
+                      BD().topRowCount = v
+                      ns.BuildAllCDMBars(); Refresh(); UpdateCDMPreviewAndResize()
+                  end },
+                { type="label", text="" });  y = y - h
         end
 
         -- Hide Buffs When Inactive / Out of Range + Show Keybind
@@ -6253,6 +6232,47 @@ initFrame:SetScript("OnEvent", function(self)
                     kbSwatch:SetAlpha(on and 1 or 0.3)
                     if on then swatchBlock:Hide() else swatchBlock:Show() end
                 end)
+            end
+        end
+
+        -- Pandemic Glow (buff bars only)
+        if barData.barType == "buffs" or barData.key == "buffs" then
+            local panRow
+            panRow, h = W:DualRow(parent, y,
+                { type="toggle", text="Pandemic Glow",
+                  getValue=function() return BD().pandemicGlow ~= false end,
+                  setValue=function(v) BD().pandemicGlow = v; Refresh(); EllesmereUI:RefreshPage() end,
+                  tooltip="Show a glow on buff icons when the remaining duration is in the pandemic window (refreshable)" },
+                { type="label", text="" });  y = y - h
+            do
+                local rgn = panRow._leftRegion
+                local ctrl = rgn and rgn._control
+                if ctrl and EllesmereUI.BuildColorSwatch then
+                    local panSwatch, updatePanSwatch = EllesmereUI.BuildColorSwatch(
+                        rgn, panRow:GetFrameLevel() + 3,
+                        function() return BD().pandemicR or 1, BD().pandemicG or 1, BD().pandemicB or 0 end,
+                        function(r, g, b)
+                            BD().pandemicR = r; BD().pandemicG = g; BD().pandemicB = b
+                            Refresh(); EllesmereUI:RefreshPage()
+                        end,
+                        false, 20)
+                    PP.Point(panSwatch, "RIGHT", ctrl, "LEFT", -8, 0)
+                    -- Blocking overlay when Pandemic Glow is off
+                    local panBlock = CreateFrame("Frame", nil, panSwatch)
+                    panBlock:SetAllPoints()
+                    panBlock:SetFrameLevel(panSwatch:GetFrameLevel() + 10)
+                    panBlock:EnableMouse(true)
+                    panBlock:SetScript("OnEnter", function()
+                        EllesmereUI.ShowWidgetTooltip(panSwatch, EllesmereUI.DisabledTooltip("Pandemic Glow"))
+                    end)
+                    panBlock:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
+                    EllesmereUI.RegisterWidgetRefresh(function()
+                        if updatePanSwatch then updatePanSwatch() end
+                        local on = BD().pandemicGlow ~= false
+                        panSwatch:SetAlpha(on and 1 or 0.3)
+                        if on then panBlock:Hide() else panBlock:Show() end
+                    end)
+                end
             end
         end
 

@@ -67,7 +67,7 @@ initFrame:SetScript("OnEvent", function(self)
     end
 
     local function SB()
-        return EAB.db.profile.bars[SelectedKey()]
+        return EAB.db.profile.bars[SelectedKey()] or {}
     end
 
     local function IsVisOnly()
@@ -76,19 +76,6 @@ initFrame:SetScript("OnEvent", function(self)
 
     local function IsDataBar()
         return DATA_BAR[SelectedKey()]
-    end
-
-    ---------------------------------------------------------------------------
-    --  Scale slider 2x multiplier conversion
-    --  Slider value stored barScale with 2x distance from 100
-    ---------------------------------------------------------------------------
-    local function SliderToScale(sliderVal)
-        return (100 + (sliderVal - 100) * 2) / 100
-    end
-
-    local function ScaleToSlider(barScale)
-        local actual = barScale * 100
-        return floor(100 + (actual - 100) / 2 + 0.5)
     end
 
     ---------------------------------------------------------------------------
@@ -260,6 +247,21 @@ initFrame:SetScript("OnEvent", function(self)
 
     -- Refresh the preview every time the panel is reopened
     EllesmereUI:RegisterOnShow(UpdatePreview)
+
+    -- Rebuild the preview when spec changes (new talent group)
+    -- Register a local event frame to detect spec changes and rebuild the preview
+    do
+        local specChangeFrame = CreateFrame("Frame")
+        specChangeFrame:RegisterEvent("ACTIVE_TALENT_GROUP_CHANGED")
+        specChangeFrame:SetScript("OnEvent", function(self, event)
+            if event == "ACTIVE_TALENT_GROUP_CHANGED" and _barsHeaderBuilder then
+                -- Force a full rebuild of the preview and header on spec change
+                activePreview = nil
+                EllesmereUI:SetContentHeader(_barsHeaderBuilder)
+                UpdatePreviewAndResize()
+            end
+        end)
+    end
 
 
 
@@ -461,9 +463,9 @@ initFrame:SetScript("OnEvent", function(self)
         end
 
         -- Scale-aware snap: snaps val to whole physical pixels at the preview's
-        -- effective scale * barScale. Uses the same approach as the border system.
-        local function SnapS(val, scale)
-            local es = pf:GetEffectiveScale() * (scale or 1)
+        -- effective scale. Uses the same approach as the border system.
+        local function SnapS(val)
+            local es = pf:GetEffectiveScale()
             return EllesmereUI.PP.SnapForES(val, es)
         end
 
@@ -577,11 +579,10 @@ initFrame:SetScript("OnEvent", function(self)
             local brdClassColor = settings.borderClassColor
             local zoom = ((settings.iconZoom or EAB.db.profile.iconZoom or 5.5)) / 100
             local square    = EAB.db.profile.squareIcons
-            local barScale  = settings.barScale or 1.0
             local hideKB    = settings.hideKeybind
 
             -- Font path (global setting)
-            local fontPath  = (EllesmereUI and EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("actionBars")) or EAB.db.profile.font or DEFAULT_FONT
+            local fontPath  = (EllesmereUI and EllesmereUI.GetFontPath and EllesmereUI.GetFontPath("actionBars")) or DEFAULT_FONT
 
             -- Font settings
             local kbSize    = settings.keybindFontSize or 12
@@ -604,32 +605,39 @@ initFrame:SetScript("OnEvent", function(self)
                 if ct then local cc = RAID_CLASS_COLORS[ct]; if cc then shapeBrdR, shapeBrdG, shapeBrdB = cc.r, cc.g, cc.b end end
             end
 
-            local scaledBtnW = SnapS(btnW * (self._blizzEditScale or 1) * barScale, barScale)
-            local scaledBtnH = SnapS(btnH * (self._blizzEditScale or 1) * barScale, barScale)
+            local scaledBtnW = SnapS(btnW * (self._blizzEditScale or 1))
+            local scaledBtnH = SnapS(btnH * (self._blizzEditScale or 1))
             -- Expand button size for custom shapes (mirrors SHAPE_BTN_EXPAND in main file)
             if btnShape ~= "none" and btnShape ~= "cropped" then
-                local shapeExp = SnapS(ns.SHAPE_BTN_EXPAND * (self._blizzEditScale or 1) * barScale, barScale)
+                local shapeExp = SnapS(ns.SHAPE_BTN_EXPAND * (self._blizzEditScale or 1))
                 scaledBtnW = scaledBtnW + shapeExp
                 scaledBtnH = scaledBtnH + shapeExp
             end
             -- Shrink button height for "cropped" mode (10% top + 10% bottom)
             if btnShape == "cropped" then
-                scaledBtnH = SnapS(scaledBtnH * 0.80, barScale)
+                scaledBtnH = SnapS(scaledBtnH * 0.80)
             end
 
-            local scaledPad  = SnapS(spacing * (self._blizzEditScale or 1) * barScale, barScale)
+            local scaledPad  = SnapS(spacing * (self._blizzEditScale or 1))
 
             -- Orientation
             local isVertical = (settings.orientation or "horizontal") == "vertical"
 
             -- Scale font sizes proportionally
-            local totalScale = (self._blizzEditScale or 1) * barScale
+            local totalScale = (self._blizzEditScale or 1)
             local scaledKBSize = math.max(6, floor(kbSize * totalScale + 0.5))
             local scaledCTSize = math.max(6, floor(ctSize * totalScale + 0.5))
 
             -- Multi-row grid layout (vertical swaps cols/rows)
-            local gridCols = isVertical and numRows or stride
-            local gridRows = isVertical and stride or numRows
+            -- For vertical: calculate actual columns used (not all numRows may be filled)
+            local gridCols, gridRows
+            if isVertical then
+                gridCols = math.ceil(numVisible / stride)
+                gridRows = stride
+            else
+                gridCols = stride
+                gridRows = numRows
+            end
             local gridW = gridCols * scaledBtnW + (gridCols - 1) * scaledPad
             local gridH = gridRows * scaledBtnH + (gridRows - 1) * scaledPad
             local gridStartX = Snap(math.max(0, (self:GetWidth() - gridW) / 2))
@@ -741,7 +749,7 @@ initFrame:SetScript("OnEvent", function(self)
                             local _, ct2 = UnitClass("player")
                             if ct2 then local cc2 = RAID_CLASS_COLORS[ct2]; if cc2 then cr, cg, cb = cc2.r, cc2.g, cc2.b end end
                         end
-                        local sz = SnapS(brdSize, barScale)
+                        local sz = SnapS(brdSize)
 
                         bT:SetColorTexture(cr, cg, cb, ca)
                         UnsnapTex(bT)
@@ -988,8 +996,15 @@ initFrame:SetScript("OnEvent", function(self)
         local function ApplyVisKey(s, v)
             s.barVisibility = v
             s.alwaysHidden      = (v == "never")
+            local wasMO = s.mouseoverEnabled
             s.mouseoverEnabled  = (v == "mouseover")
-            s.mouseoverAlpha    = (v == "mouseover") and 0 or 1
+            if v == "mouseover" then
+                s._savedBarAlpha = s.mouseoverAlpha or 1
+                s.mouseoverAlpha = 0
+            elseif wasMO and s._savedBarAlpha then
+                s.mouseoverAlpha = s._savedBarAlpha
+                s._savedBarAlpha = nil
+            end
             s.combatHideEnabled = false
             s.combatShowEnabled = (v == "in_combat")
         end
@@ -1075,8 +1090,15 @@ initFrame:SetScript("OnEvent", function(self)
         local function ApplyVisKey(s, v)
             s.barVisibility = v
             s.alwaysHidden      = (v == "never")
+            local wasMO = s.mouseoverEnabled
             s.mouseoverEnabled  = (v == "mouseover")
-            s.mouseoverAlpha    = (v == "mouseover") and 0 or 1
+            if v == "mouseover" then
+                s._savedBarAlpha = s.mouseoverAlpha or 1
+                s.mouseoverAlpha = 0
+            elseif wasMO and s._savedBarAlpha then
+                s.mouseoverAlpha = s._savedBarAlpha
+                s._savedBarAlpha = nil
+            end
             s.combatHideEnabled = false
             s.combatShowEnabled = (v == "in_combat")
         end
@@ -1305,255 +1327,169 @@ initFrame:SetScript("OnEvent", function(self)
         end
 
         -----------------------------------------------------------------------
-        --  LAYOUT  (hidden when visibility-only)
+        --  VISIBILITY
         -----------------------------------------------------------------------
-        if not visOnly then
-            _, h = W:SectionHeader(parent, SECTION_LAYOUT, y);  y = y - h
+        _, h = W:SectionHeader(parent, SECTION_VISIBILITY, y);  y = y - h
 
-            -- Row 1: Bar Visibility (dropdown + housing cog) | Always Show Buttons
-            do
-                local _visBlizzDis
-                local _VIS_BLIZZ_TIP = "This option does not work with Blizzard Bars. Please use Blizzard Edit Mode."
-                if IsDataBar() then
-                    _visBlizzDis = function() return EAB.db.profile.useBlizzardDataBars end
-                end
-
-                local function GetVisKey(s)
-                    return s.barVisibility or "always"
-                end
-
-                local function ApplyVisKey(s, v)
-                    s.barVisibility = v
-                    -- Keep legacy booleans in sync for backward compat
-                    s.alwaysHidden     = (v == "never")
-                    s.mouseoverEnabled = (v == "mouseover")
-                    s.mouseoverAlpha   = (v == "mouseover") and 0 or 1
-                    s.combatHideEnabled = false
-                    s.combatShowEnabled = (v == "in_combat")
-                end
-
-                local visRow1
-                visRow1, h = W:DualRow(parent, y,
-                    { type="dropdown", text="Visibility",
-                      values=EllesmereUI.VIS_VALUES, order=EllesmereUI.VIS_ORDER,
-                      disabled=_visBlizzDis, disabledTooltip=_visBlizzDis and _VIS_BLIZZ_TIP or nil,
-                      getValue=function()
-                          return GetVisKey(SB())
-                      end,
-                      setValue=function(v)
-                          ApplyVisKey(SB(), v)
-                          EAB:ApplyAlwaysHidden()
-                          EAB:RefreshMouseover()
-                          EAB:ApplyCombatVisibility()
-                          EllesmereUI:RefreshPage()
-                      end },
-                    { type="dropdown", text="Visibility Options",
-                      values={ __placeholder = "..." }, order={ "__placeholder" },
-                      getValue=function() return "__placeholder" end,
-                      setValue=function() end });  y = y - h
-
-                -- Replace the dummy right dropdown with checkbox dropdown
-                do
-                    local rightRgn = visRow1._rightRegion
-                    if rightRgn._control then rightRgn._control:Hide() end
-                    local cbDD, cbDDRefresh = EllesmereUI.BuildVisOptsCBDropdown(
-                        rightRgn, 210, rightRgn:GetFrameLevel() + 2,
-                        EllesmereUI.VIS_OPT_ITEMS,
-                        function(k) return SB()[k] or false end,
-                        function(k, v)
-                            SB()[k] = v
-                            EAB:UpdateHousingVisibility()
-                            EAB:ApplyCombatVisibility()
-                            EllesmereUI:RefreshPage()
-                        end)
-                    local PP = EllesmereUI.PanelPP
-                    PP.Point(cbDD, "RIGHT", rightRgn, "RIGHT", -20, 0)
-                    rightRgn._control = cbDD
-                    rightRgn._lastInline = nil
-                    EllesmereUI.RegisterWidgetRefresh(cbDDRefresh)
-                end
-                -- Sync icon: Bar Visibility (left region)
-                do
-                    local rgn = visRow1._leftRegion
-                    EllesmereUI.BuildSyncIcon({
-                        region  = rgn,
-                        tooltip = "Apply Visibility Mode to all Bars",
-                        onClick = function()
-                            local s = SB()
-                            local v = s.barVisibility or "always"
-                            for _, key in ipairs(GROUP_BAR_ORDER) do
-                                local bs = EAB.db.profile.bars[key]
-                                bs.barVisibility = v
-                                bs.alwaysHidden = s.alwaysHidden
-                                bs.mouseoverEnabled = s.mouseoverEnabled
-                                bs.mouseoverAlpha = s.mouseoverAlpha
-                                bs.combatHideEnabled = s.combatHideEnabled
-                                bs.combatShowEnabled = s.combatShowEnabled
-                            end
-                            EAB:ApplyAlwaysHidden(); EAB:RefreshMouseover(); EAB:ApplyCombatVisibility()
-                            EllesmereUI:RefreshPage()
-                        end,
-                        isSynced = function()
-                            local s = SB()
-                            local v = s.barVisibility or "always"
-                            for _, key in ipairs(GROUP_BAR_ORDER) do
-                                local bs = EAB.db.profile.bars[key]
-                                if (bs.barVisibility or "always") ~= v then return false end
-                            end
-                            return true
-                        end,
-                        flashTargets = function() return { rgn } end,
-                        multiApply = {
-                            elementKeys   = GROUP_BAR_ORDER,
-                            elementLabels = SHORT_LABELS,
-                            getCurrentKey = function() return SelectedKey() end,
-                            onApply       = function(checkedKeys)
-                                local s = SB()
-                                local v = s.barVisibility or "always"
-                                for _, key in ipairs(checkedKeys) do
-                                    local bs = EAB.db.profile.bars[key]
-                                    bs.barVisibility = v
-                                    bs.alwaysHidden = s.alwaysHidden
-                                    bs.mouseoverEnabled = s.mouseoverEnabled
-                                    bs.mouseoverAlpha = s.mouseoverAlpha
-                                    bs.combatHideEnabled = s.combatHideEnabled
-                                    bs.combatShowEnabled = s.combatShowEnabled
-                                end
-                                EAB:ApplyAlwaysHidden(); EAB:RefreshMouseover(); EAB:ApplyCombatVisibility()
-                                EllesmereUI:RefreshPage()
-                            end,
-                        },
-                    })
-                end
-
-                -- Sync icon: Visibility Options (right region)
-                do
-                    local rgn = visRow1._rightRegion
-                    EllesmereUI.BuildSyncIcon({
-                        region  = rgn,
-                        tooltip = "Apply Visibility Options to all Bars",
-                        onClick = function()
-                            local s = SB()
-                            for _, item in ipairs(EllesmereUI.VIS_OPT_ITEMS) do
-                                local k = item.key
-                                local val = s[k] or false
-                                for _, key in ipairs(GROUP_BAR_ORDER) do
-                                    EAB.db.profile.bars[key][k] = val
-                                end
-                            end
-                            EAB:UpdateHousingVisibility()
-                            EAB:ApplyCombatVisibility()
-                            EllesmereUI:RefreshPage()
-                        end,
-                        isSynced = function()
-                            local s = SB()
-                            for _, item in ipairs(EllesmereUI.VIS_OPT_ITEMS) do
-                                local k = item.key
-                                local val = s[k] or false
-                                for _, key in ipairs(GROUP_BAR_ORDER) do
-                                    if (EAB.db.profile.bars[key][k] or false) ~= val then return false end
-                                end
-                            end
-                            return true
-                        end,
-                        flashTargets = function() return { rgn } end,
-                        multiApply = {
-                            elementKeys   = GROUP_BAR_ORDER,
-                            elementLabels = SHORT_LABELS,
-                            getCurrentKey = function() return SelectedKey() end,
-                            onApply       = function(checkedKeys)
-                                local s = SB()
-                                for _, item in ipairs(EllesmereUI.VIS_OPT_ITEMS) do
-                                    local k = item.key
-                                    local val = s[k] or false
-                                    for _, key in ipairs(checkedKeys) do
-                                        EAB.db.profile.bars[key][k] = val
-                                    end
-                                end
-                                EAB:UpdateHousingVisibility()
-                                EAB:ApplyCombatVisibility()
-                                EllesmereUI:RefreshPage()
-                            end,
-                        },
-                    })
-                end
+        -- Row 1: Bar Visibility (dropdown) | Visibility Options
+        do
+            local _visBlizzDis
+            local _VIS_BLIZZ_TIP = "This option does not work with Blizzard Bars. Please use Blizzard Edit Mode."
+            if IsDataBar() then
+                _visBlizzDis = function() return EAB.db.profile.useBlizzardDataBars end
             end
 
-            -- Row 2: Always Show Buttons | Bar Opacity
-            row, h = W:DualRow(parent, y,
-                { type="toggle", text="Always Show Buttons",
+            local function GetVisKey(s)
+                return s.barVisibility or "always"
+            end
+
+            local function ApplyVisKey(s, v)
+                s.barVisibility = v
+                -- Keep boolean flags in sync
+                s.alwaysHidden     = (v == "never")
+                local wasMO = s.mouseoverEnabled
+                s.mouseoverEnabled = (v == "mouseover")
+                if v == "mouseover" then
+                    s._savedBarAlpha = s.mouseoverAlpha or 1
+                    s.mouseoverAlpha = 0
+                elseif wasMO and s._savedBarAlpha then
+                    s.mouseoverAlpha = s._savedBarAlpha
+                    s._savedBarAlpha = nil
+                end
+                s.combatHideEnabled = false
+                s.combatShowEnabled = (v == "in_combat")
+            end
+
+            local visRow1
+            visRow1, h = W:DualRow(parent, y,
+                { type="dropdown", text="Visibility",
+                  values=EllesmereUI.VIS_VALUES, order=EllesmereUI.VIS_ORDER,
+                  disabled=_visBlizzDis, disabledTooltip=_visBlizzDis and _VIS_BLIZZ_TIP or nil,
                   getValue=function()
-                      local v = SGet("alwaysShowButtons")
-                      if v == nil then return true end
-                      return v
+                      return GetVisKey(SB())
                   end,
                   setValue=function(v)
-                      SSet("alwaysShowButtons", v, function(k)
-                          EAB:ApplyAlwaysShowButtons(k)
-                          EAB:ApplyPaddingForBar(k)
-                          EAB:ApplyBackgroundForBar(k)
-                      end)
-                      SUpdatePreview()
-                  end,
-                  tooltip="Show button backgrounds even if a spell is not assigned to that slot." },
-                { type="slider", text="Bar Opacity", min=0, max=100, step=5,
-                  getValue=function()
-                      local bs = SB()
-                      local eff = bs.mouseoverEnabled and 1 or (bs.mouseoverAlpha or 1)
-                      return floor(eff * 100 + 0.5)
-                  end,
-                  setValue=function(v)
-                      SSet("mouseoverAlpha", v / 100, function(k) EAB:ApplyBarOpacity(k) end)
-                      SUpdatePreview()
-                  end });  y = y - h
-            -- Sync icon: Bar Opacity (right)
+                      ApplyVisKey(SB(), v)
+                      EAB:ApplyAlwaysHidden()
+                      EAB:RefreshMouseover()
+                      EAB:ApplyCombatVisibility()
+                      EllesmereUI:RefreshPage()
+                  end },
+                { type="dropdown", text="Visibility Options",
+                  values={ __placeholder = "..." }, order={ "__placeholder" },
+                  getValue=function() return "__placeholder" end,
+                  setValue=function() end });  y = y - h
+
+            -- Replace the dummy right dropdown with checkbox dropdown
             do
-                local rgn = row._rightRegion
-                EllesmereUI.BuildSyncIcon({
-                    region  = rgn,
-                    tooltip = "Apply Bar Opacity to all Bars",
-                    onClick = function()
+                local rightRgn = visRow1._rightRegion
+                if rightRgn._control then rightRgn._control:Hide() end
+                local cbDD, cbDDRefresh = EllesmereUI.BuildVisOptsCBDropdown(
+                    rightRgn, 210, rightRgn:GetFrameLevel() + 2,
+                    EllesmereUI.VIS_OPT_ITEMS,
+                    function(k) return SB()[k] or false end,
+                    function(k, v)
+                        SB()[k] = v
+                        EAB:UpdateHousingVisibility()
+                        EAB:ApplyCombatVisibility()
+                        EllesmereUI:RefreshPage()
+                    end)
+                PP.Point(cbDD, "RIGHT", rightRgn, "RIGHT", -20, 0)
+                rightRgn._control = cbDD
+                rightRgn._lastInline = nil
+                EllesmereUI.RegisterWidgetRefresh(cbDDRefresh)
+            end
+        end
+
+        -- Row 2: Always Show Buttons | Bar Opacity
+        row, h = W:DualRow(parent, y,
+            { type="toggle", text="Always Show Buttons",
+              getValue=function()
+                  local v = SGet("alwaysShowButtons")
+                  if v == nil then return true end
+                  return v
+              end,
+              setValue=function(v)
+                  SSet("alwaysShowButtons", v, function(k)
+                      EAB:ApplyAlwaysShowButtons(k)
+                      EAB:ApplyPaddingForBar(k)
+                      EAB:ApplyBackgroundForBar(k)
+                  end)
+                  SUpdatePreview()
+              end,
+              tooltip="Show button backgrounds even if a spell is not assigned to that slot." },
+            { type="slider", text="Bar Opacity", min=0, max=100, step=5,
+              getValue=function()
+                  local bs = SB()
+                  local eff = bs.mouseoverEnabled and 1 or (bs.mouseoverAlpha or 1)
+                  return floor(eff * 100 + 0.5)
+              end,
+              setValue=function(v)
+                  SSet("mouseoverAlpha", v / 100, function(k) EAB:ApplyBarOpacity(k) end)
+                  SUpdatePreview()
+              end });  y = y - h
+        -- Sync icon: Bar Opacity (right)
+        do
+            local rgn = row._rightRegion
+            EllesmereUI.BuildSyncIcon({
+                region  = rgn,
+                tooltip = "Apply Bar Opacity to all Bars",
+                onClick = function()
+                    local v = SB().mouseoverAlpha or 1
+                    for _, key in ipairs(GROUP_BAR_ORDER) do
+                        EAB.db.profile.bars[key].mouseoverAlpha = v
+                        EAB:ApplyBarOpacity(key)
+                    end
+                    EllesmereUI:RefreshPage()
+                end,
+                isSynced = function()
+                    local cur = SB()
+                    local v = cur.mouseoverEnabled and 1 or (cur.mouseoverAlpha or 1)
+                    for _, key in ipairs(GROUP_BAR_ORDER) do
+                        local bs = EAB.db.profile.bars[key]
+                        local bv = bs.mouseoverEnabled and 1 or (bs.mouseoverAlpha or 1)
+                        if bv ~= v then return false end
+                    end
+                    return true
+                end,
+                flashTargets = function() return { rgn } end,
+                multiApply = {
+                    elementKeys   = GROUP_BAR_ORDER,
+                    elementLabels = SHORT_LABELS,
+                    getCurrentKey = function() return SelectedKey() end,
+                    onApply       = function(checkedKeys)
                         local v = SB().mouseoverAlpha or 1
-                        for _, key in ipairs(GROUP_BAR_ORDER) do
+                        for _, key in ipairs(checkedKeys) do
                             EAB.db.profile.bars[key].mouseoverAlpha = v
                             EAB:ApplyBarOpacity(key)
                         end
                         EllesmereUI:RefreshPage()
                     end,
-                    isSynced = function()
-                        local v = SB().mouseoverAlpha or 1
-                        for _, key in ipairs(GROUP_BAR_ORDER) do
-                            if (EAB.db.profile.bars[key].mouseoverAlpha or 1) ~= v then return false end
-                        end
-                        return true
-                    end,
-                    flashTargets = function() return { rgn } end,
-                    multiApply = {
-                        elementKeys   = GROUP_BAR_ORDER,
-                        elementLabels = SHORT_LABELS,
-                        getCurrentKey = function() return SelectedKey() end,
-                        onApply       = function(checkedKeys)
-                            local v = SB().mouseoverAlpha or 1
-                            for _, key in ipairs(checkedKeys) do
-                                EAB.db.profile.bars[key].mouseoverAlpha = v
-                                EAB:ApplyBarOpacity(key)
-                            end
-                            EllesmereUI:RefreshPage()
-                        end,
-                    },
-                })
-            end
+                },
+            })
+        end
 
-            row, h = W:DualRow(parent, y,
-                { type="slider", text="Bar Scale", min=75, max=125, step=1,
+        -----------------------------------------------------------------------
+        --  LAYOUT  (hidden when visibility-only)
+        -----------------------------------------------------------------------
+        if not visOnly then
+            _, h = W:SectionHeader(parent, SECTION_LAYOUT, y);  y = y - h
+
+            -- Row 1: Icon Size | Button Spacing
+            local iconSizeRow
+            iconSizeRow, h = W:DualRow(parent, y,
+                { type="slider", text="Icon Size", min=16, max=80, step=1,
                   getValue=function()
-                      local v = SGet("barScale")
-                      return ScaleToSlider(v or 1.0)
+                      local s = SB()
+                      if s.buttonWidth and s.buttonWidth > 0 then return s.buttonWidth end
+                      local info = BAR_LOOKUP[SelectedKey()]
+                      local btn1 = info and _G[info.buttonPrefix .. "1"]
+                      return btn1 and math.floor((btn1:GetWidth() or 36) + 0.5) or 36
                   end,
                   setValue=function(v)
-                      local real = SliderToScale(v)
-                      SB().barScale = real
-                      EAB:ApplyScalePreserveCenter(SelectedKey())
+                      SB().buttonWidth  = v
+                      SB().buttonHeight = v
+                      EAB:ApplyButtonSizeForBar(SelectedKey())
                       SUpdatePreviewAndResize()
                       EllesmereUI:RefreshPage()
                   end },
@@ -1563,24 +1499,35 @@ initFrame:SetScript("OnEvent", function(self)
                       SSet("buttonPadding", v, function(k) EAB:ApplyPaddingForBar(k) end)
                       SUpdatePreview()
                   end });  y = y - h
-            -- Sync icons: Bar Scale (left) and Button Spacing (right)
+            -- Sync icon: Icon Size (left)
             do
-                local rgn = row._leftRegion
+                local rgn = iconSizeRow._leftRegion
                 EllesmereUI.BuildSyncIcon({
                     region  = rgn,
-                    tooltip = "Apply Bar Scale to all Bars",
+                    tooltip = "Apply Icon Size to all Bars",
                     onClick = function()
-                        local v = SB().barScale or 1.0
+                        local s = SB()
+                        local info = BAR_LOOKUP[SelectedKey()]
+                        local btn1 = info and _G[info.buttonPrefix .. "1"]
+                        local v = (s.buttonWidth and s.buttonWidth > 0) and s.buttonWidth
+                            or (btn1 and math.floor((btn1:GetWidth() or 36) + 0.5)) or 36
                         for _, key in ipairs(GROUP_BAR_ORDER) do
-                            EAB.db.profile.bars[key].barScale = v
-                            EAB:ApplyScalePreserveCenter(key)
+                            EAB.db.profile.bars[key].buttonWidth  = v
+                            EAB.db.profile.bars[key].buttonHeight = v
+                            EAB:ApplyButtonSizeForBar(key)
                         end
                         EllesmereUI:RefreshPage()
                     end,
                     isSynced = function()
-                        local v = SB().barScale or 1.0
+                        local s = SB()
+                        local info = BAR_LOOKUP[SelectedKey()]
+                        local btn1 = info and _G[info.buttonPrefix .. "1"]
+                        local v = (s.buttonWidth and s.buttonWidth > 0) and s.buttonWidth
+                            or (btn1 and math.floor((btn1:GetWidth() or 36) + 0.5)) or 36
                         for _, key in ipairs(GROUP_BAR_ORDER) do
-                            if (EAB.db.profile.bars[key].barScale or 1.0) ~= v then return false end
+                            local ks = EAB.db.profile.bars[key]
+                            local kv = (ks.buttonWidth and ks.buttonWidth > 0) and ks.buttonWidth or v
+                            if kv ~= v then return false end
                         end
                         return true
                     end,
@@ -1590,18 +1537,24 @@ initFrame:SetScript("OnEvent", function(self)
                         elementLabels = SHORT_LABELS,
                         getCurrentKey = function() return SelectedKey() end,
                         onApply       = function(checkedKeys)
-                            local v = SB().barScale or 1.0
+                            local s = SB()
+                            local info = BAR_LOOKUP[SelectedKey()]
+                            local btn1 = info and _G[info.buttonPrefix .. "1"]
+                            local v = (s.buttonWidth and s.buttonWidth > 0) and s.buttonWidth
+                                or (btn1 and math.floor((btn1:GetWidth() or 36) + 0.5)) or 36
                             for _, key in ipairs(checkedKeys) do
-                                EAB.db.profile.bars[key].barScale = v
-                                EAB:ApplyScalePreserveCenter(key)
+                                EAB.db.profile.bars[key].buttonWidth  = v
+                                EAB.db.profile.bars[key].buttonHeight = v
+                                EAB:ApplyButtonSizeForBar(key)
                             end
                             EllesmereUI:RefreshPage()
                         end,
                     },
                 })
             end
+            -- Sync icon: Button Spacing (right)
             do
-                local rgn = row._rightRegion
+                local rgn = iconSizeRow._rightRegion
                 EllesmereUI.BuildSyncIcon({
                     region  = rgn,
                     tooltip = "Apply Button Spacing to all Bars",
@@ -1637,6 +1590,7 @@ initFrame:SetScript("OnEvent", function(self)
                 })
             end
 
+            -- Row 2: Number of Icons | Number of Rows
             row, h = W:DualRow(parent, y,
                 { type="slider", text="Number of Icons", min=1, max=12, step=1,
                   isDisabled=function()
@@ -1743,7 +1697,6 @@ initFrame:SetScript("OnEvent", function(self)
                     },
                 })
             end
-
             -- Inline cog on Number of Rows (right) for Grow Direction
             do
                 local rightRgn = row._rightRegion
@@ -1764,7 +1717,7 @@ initFrame:SetScript("OnEvent", function(self)
                 MakeCogBtn(rightRgn, growCogShow)
             end
 
-            -- Vertical Orientation | (empty)
+            -- Row 3: Vertical Orientation | (empty)
             do
                 local orientRow
                 orientRow, h = W:DualRow(parent, y,
@@ -2795,6 +2748,105 @@ initFrame:SetScript("OnEvent", function(self)
                 MakeCogBtn(leftRgn, ctSizeCogShow, nil, EllesmereUI.RESIZE_ICON)
             end
 
+            -- Row 3: Cooldown Text colorpicker (left) | empty (right)
+            local cdTextRow
+            cdTextRow, h = W:DualRow(parent, y,
+                { type="colorpicker", text="Cooldown Text",
+                  getValue=function()
+                      local c = SGet("cooldownTextColor")
+                      if not c then return 1, 1, 1, 1 end
+                      return c.r, c.g, c.b, 1
+                  end,
+                  setValue=function(r, g, b)
+                      SSetColor("cooldownTextColor", r, g, b, nil, function(k) EAB:ApplyCooldownFontsForBar(k) end)
+                      SUpdatePreview()
+                  end,
+                  hasAlpha=false },
+                { type="label", text="" });  y = y - h
+
+            -- Sync icon: Cooldown Text (left region)
+            do
+                local rgn = cdTextRow._leftRegion
+                EllesmereUI.BuildSyncIcon({
+                    region  = rgn,
+                    tooltip = "Apply Cooldown Text Settings to all Bars",
+                    onClick = function()
+                        local s = SB()
+                        local c = s.cooldownTextColor
+                        local sz = s.cooldownFontSize or 12
+                        local ox = s.cooldownTextXOffset or 0
+                        local oy = s.cooldownTextYOffset or 0
+                        for _, key in ipairs(GROUP_BAR_ORDER) do
+                            if c then EAB.db.profile.bars[key].cooldownTextColor = { r=c.r, g=c.g, b=c.b } end
+                            EAB.db.profile.bars[key].cooldownFontSize = sz
+                            EAB.db.profile.bars[key].cooldownTextXOffset = ox
+                            EAB.db.profile.bars[key].cooldownTextYOffset = oy
+                            EAB:ApplyCooldownFontsForBar(key)
+                        end
+                        EllesmereUI:RefreshPage()
+                    end,
+                    isSynced = function()
+                        local s = SB()
+                        local sz = s.cooldownFontSize or 12
+                        for _, key in ipairs(GROUP_BAR_ORDER) do
+                            if (EAB.db.profile.bars[key].cooldownFontSize or 12) ~= sz then return false end
+                        end
+                        return true
+                    end,
+                    flashTargets = function() return { rgn } end,
+                    multiApply = {
+                        elementKeys   = GROUP_BAR_ORDER,
+                        elementLabels = SHORT_LABELS,
+                        getCurrentKey = function() return SelectedKey() end,
+                        onApply       = function(checkedKeys)
+                            local s = SB()
+                            local c = s.cooldownTextColor
+                            local sz = s.cooldownFontSize or 12
+                            local ox = s.cooldownTextXOffset or 0
+                            local oy = s.cooldownTextYOffset or 0
+                            for _, key in ipairs(checkedKeys) do
+                                if c then EAB.db.profile.bars[key].cooldownTextColor = { r=c.r, g=c.g, b=c.b } end
+                                EAB.db.profile.bars[key].cooldownFontSize = sz
+                                EAB.db.profile.bars[key].cooldownTextXOffset = ox
+                                EAB.db.profile.bars[key].cooldownTextYOffset = oy
+                                EAB:ApplyCooldownFontsForBar(key)
+                            end
+                            EllesmereUI:RefreshPage()
+                        end,
+                    },
+                })
+            end
+
+            -- Inline cog on Cooldown Text (left) for Size + X/Y offsets
+            do
+                local leftRgn = cdTextRow._leftRegion
+                local _, cdSizeCogShowRaw = EllesmereUI.BuildCogPopup({
+                    title = "Cooldown Text Settings",
+                    rows = {
+                        { type="slider", label="Size", min=6, max=24, step=1,
+                          get=function() return SVal("cooldownFontSize", 12) end,
+                          set=function(v)
+                              SSet("cooldownFontSize", v, function(k) EAB:ApplyCooldownFontsForBar(k) end)
+                              SUpdatePreview()
+                          end },
+                        { type="slider", label="X Offset", min=-20, max=20, step=1,
+                          get=function() return SVal("cooldownTextXOffset", 0) end,
+                          set=function(v)
+                              SSet("cooldownTextXOffset", v, function(k) EAB:ApplyCooldownFontsForBar(k) end)
+                              SUpdatePreview()
+                          end },
+                        { type="slider", label="Y Offset", min=-20, max=20, step=1,
+                          get=function() return SVal("cooldownTextYOffset", 0) end,
+                          set=function(v)
+                              SSet("cooldownTextYOffset", v, function(k) EAB:ApplyCooldownFontsForBar(k) end)
+                              SUpdatePreview()
+                          end },
+                    },
+                })
+                local cdSizeCogShow = cdSizeCogShowRaw
+                MakeCogBtn(leftRgn, cdSizeCogShow, nil, EllesmereUI.RESIZE_ICON)
+            end
+
             _, h = W:Spacer(parent, y, 20);  y = y - h
 
             -------------------------------------------------------------------
@@ -3279,14 +3331,11 @@ initFrame:SetScript("OnEvent", function(self)
             if lineLen < 1 then lineLen = 1 end
             ns.Glows.StartProceduralAnts(f, N, th, period, lineLen, cr, cg, cb)
         elseif loopEntry.buttonGlow then
-            -- Custom Proc Glow preview
-            local baseScale = loopEntry.previewScale or 1.0
-            ns.Glows.StartButtonGlow(f, iconSize, cr, cg, cb, baseScale * (p.procGlowScale or 1.0))
+            ns.Glows.StartButtonGlow(f, iconSize, cr, cg, cb)
         elseif loopEntry.autocast then
-            -- Auto-Cast Shine preview
-            ns.Glows.StartAutoCastShine(f, iconSize, cr, cg, cb, p.procGlowScale or 1.0)
+            ns.Glows.StartAutoCastShine(f, iconSize, cr, cg, cb, 1.0)
         elseif loopEntry.shapeGlow then
-            -- Shape Glow preview — use first bar's shape mask
+            -- Shape Glow preview -- use first bar's shape mask
             local maskPath
             for k, bs in pairs(EAB.db.profile.bars) do
                 if bs then
@@ -3294,12 +3343,11 @@ initFrame:SetScript("OnEvent", function(self)
                     if ns.SHAPE_MASKS[shape] then maskPath = ns.SHAPE_MASKS[shape]; break end
                 end
             end
-            local baseScale = loopEntry.previewScale or 1.20
-            ns.Glows.StartShapeGlow(f, iconSize, cr, cg, cb, baseScale * (p.procGlowScale or 1.0), { maskPath = maskPath })
+            ns.Glows.StartShapeGlow(f, iconSize, cr, cg, cb, 1.20, { maskPath = maskPath })
         else
             -- FlipBook preview
-            local texSz = iconSize * (loopEntry.previewScale or loopEntry.scale or 1) * (p.procGlowScale or 1.0)
-            f._loopTex:SetSize(texSz, texSz)
+            local previewSz = iconSize * (loopEntry.texPadding or 1)
+            f._loopTex:SetSize(previewSz, previewSz)
             if loopEntry.atlas then
                 f._loopTex:SetAtlas(loopEntry.atlas)
             elseif loopEntry.texture then
