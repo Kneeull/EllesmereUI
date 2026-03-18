@@ -214,6 +214,30 @@ local function GetProfilesDB()
 end
 EllesmereUI.GetProfilesDB = GetProfilesDB
 
+-- Defined early for load-order safety. These helpers are used by assignment,
+-- delete/rename, and autoswitch logic (including ADDON_LOADED), so they must
+-- exist before any of those paths execute.
+
+local function IsProfileAssignedToAnySpec(profileName)
+    local db = GetProfilesDB()
+    for _, pName in pairs(db.specProfiles or {}) do
+        if pName == profileName then
+            return true
+        end
+    end
+    return false
+end
+
+local function IsProfileAltForAnySpec(profileName)
+    local db = GetProfilesDB()
+    for _, altSet in pairs(db.specAltProfiles or {}) do
+        if altSet and altSet[profileName] then
+            return true
+        end
+    end
+    return false
+end
+
 --- Check if an addon is loaded
 local function IsAddonLoaded(name)
     if C_AddOns and C_AddOns.IsAddOnLoaded then return C_AddOns.IsAddOnLoaded(name) end
