@@ -80,7 +80,7 @@ initFrame:SetScript("OnEvent", function(self)
     local EUI_DEFAULTS = {
         { "cameraDistanceMaxZoomFactor",                    "2.6" },
         { "ActionButtonUseKeyDown",                         "1"   },
-        { "SpellQueueWindow",                               "300" },
+        { "SpellQueueWindow",                               "150" },
         { "floatingCombatTextCombatHealing_v2",             "1"   },
         { "WorldTextScale_v2",                              "0.5" },
         { "floatingCombatTextCombatDamage_v2",              "1"   },
@@ -804,209 +804,6 @@ initFrame:SetScript("OnEvent", function(self)
                 SetCVarSafe("SpellQueueWindow", v)
               end });  y = y - h
 
-        --[[ DISABLED: Distance to Target / Melee Indicator (WIP)
-        local distRow
-        distRow, h = W:DualRow(parent, y,
-            { type="toggle", text="Distance to Target",
-              tooltip="Displays estimated distance range to your current target.",
-              getValue=function()
-                return EllesmereUIDB and EllesmereUIDB.showDistanceText or false
-              end,
-              setValue=function(v)
-                if not EllesmereUIDB then EllesmereUIDB = {} end
-                EllesmereUIDB.showDistanceText = v
-                if EllesmereUI._applyDistanceText then EllesmereUI._applyDistanceText() end
-                EllesmereUI:RefreshPage()
-              end },
-            { type="toggle", text="Out of Melee Indicator",
-              tooltip="Displays a visual indicator when your target is out of melee range. Only visible during combat.",
-              getValue=function()
-                return EllesmereUIDB and EllesmereUIDB.showMeleeIndicator or false
-              end,
-              setValue=function(v)
-                if not EllesmereUIDB then EllesmereUIDB = {} end
-                EllesmereUIDB.showMeleeIndicator = v
-                if EllesmereUI._applyMeleeIndicator then EllesmereUI._applyMeleeIndicator() end
-                EllesmereUI:RefreshPage()
-              end }
-        );  y = y - h
-
-        -- Cog on Distance to Target (left region)
-        do
-            local leftRgn = distRow._leftRegion
-            local function distOff()
-                return not (EllesmereUIDB and EllesmereUIDB.showDistanceText)
-            end
-
-            local _, distCogShow = EllesmereUI.BuildCogPopup({
-                title = "Distance Text Settings",
-                rows = {
-                    { type = "slider", label = "Font Size", min = 8, max = 36, step = 1,
-                      get = function()
-                          return (EllesmereUIDB and EllesmereUIDB.distanceFontSize) or 16
-                      end,
-                      set = function(v)
-                          if not EllesmereUIDB then EllesmereUIDB = {} end
-                          EllesmereUIDB.distanceFontSize = v
-                          if EllesmereUI._applyDistanceText then EllesmereUI._applyDistanceText() end
-                      end },
-                    { type = "toggle", label = "Use Fixed Color",
-                      get = function()
-                          return EllesmereUIDB and EllesmereUIDB.distanceFixedColor or false
-                      end,
-                      set = function(v)
-                          if not EllesmereUIDB then EllesmereUIDB = {} end
-                          EllesmereUIDB.distanceFixedColor = v
-                          if EllesmereUI._applyDistanceText then EllesmereUI._applyDistanceText() end
-                      end },
-                    { type = "colorpicker", label = "Fixed Color",
-                      disabled = function()
-                          return not (EllesmereUIDB and EllesmereUIDB.distanceFixedColor)
-                      end,
-                      disabledTooltip = "Use Fixed Color",
-                      get = function()
-                          local c = EllesmereUIDB and EllesmereUIDB.distanceTextColor
-                          if c then return c.r, c.g, c.b end
-                          return 1, 1, 1
-                      end,
-                      set = function(r, g, b)
-                          if not EllesmereUIDB then EllesmereUIDB = {} end
-                          EllesmereUIDB.distanceTextColor = { r = r, g = g, b = b }
-                      end },
-                    { type = "slider", label = "Scale", min = 50, max = 200, step = 5,
-                      get = function()
-                          local pos = EllesmereUIDB and EllesmereUIDB.distanceTextPos
-                          return floor(((pos and pos.scale) or 1.0) * 100 + 0.5)
-                      end,
-                      set = function(v)
-                          if not EllesmereUIDB then EllesmereUIDB = {} end
-                          if not EllesmereUIDB.distanceTextPos then EllesmereUIDB.distanceTextPos = {} end
-                          EllesmereUIDB.distanceTextPos.scale = v / 100
-                          if EllesmereUI._applyDistanceText then EllesmereUI._applyDistanceText() end
-                      end },
-                },
-            })
-            local distCogBtn = CreateFrame("Button", nil, leftRgn)
-            distCogBtn:SetSize(26, 26)
-            distCogBtn:SetPoint("RIGHT", leftRgn._lastInline or leftRgn._control, "LEFT", -9, 0)
-            leftRgn._lastInline = distCogBtn
-            distCogBtn:SetFrameLevel(leftRgn:GetFrameLevel() + 5)
-            distCogBtn:SetAlpha(distOff() and 0.15 or 0.4)
-            local distCogTex = distCogBtn:CreateTexture(nil, "OVERLAY")
-            distCogTex:SetAllPoints()
-            distCogTex:SetTexture(EllesmereUI.COGS_ICON)
-            distCogBtn:SetScript("OnEnter", function(self) self:SetAlpha(0.7) end)
-            distCogBtn:SetScript("OnLeave", function(self) self:SetAlpha(distOff() and 0.15 or 0.4) end)
-            distCogBtn:SetScript("OnClick", function(self) distCogShow(self) end)
-
-            local distCogBlock = CreateFrame("Frame", nil, distCogBtn)
-            distCogBlock:SetAllPoints()
-            distCogBlock:SetFrameLevel(distCogBtn:GetFrameLevel() + 10)
-            distCogBlock:EnableMouse(true)
-            distCogBlock:SetScript("OnEnter", function()
-                EllesmereUI.ShowWidgetTooltip(distCogBtn, EllesmereUI.DisabledTooltip("Distance to Target"))
-            end)
-            distCogBlock:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
-
-            EllesmereUI.RegisterWidgetRefresh(function()
-                if distOff() then
-                    distCogBtn:SetAlpha(0.15)
-                    distCogBlock:Show()
-                else
-                    distCogBtn:SetAlpha(0.4)
-                    distCogBlock:Hide()
-                end
-            end)
-            distCogBtn:SetAlpha(distOff() and 0.15 or 0.4)
-            if distOff() then distCogBlock:Show() else distCogBlock:Hide() end
-        end
-
-        -- Cog on Out of Melee Indicator (right region)
-        do
-            local rightRgn = distRow._rightRegion
-            local function meleeOff()
-                return not (EllesmereUIDB and EllesmereUIDB.showMeleeIndicator)
-            end
-
-            local meleeTexValues = {
-                _menuOpts = {
-                    icon = function(key)
-                        if key and key ~= "" then return key end
-                    end,
-                    itemHeight = 30,
-                },
-                ["Interface\\RAIDFRAME\\ReadyCheck-NotReady"]          = { text = "Ready Check X" },
-                ["Interface\\DialogFrame\\UI-Dialog-Icon-AlertNew"]    = { text = "Alert Icon (New)" },
-                ["Interface\\Worldmap\\Skull_64Red"]                   = { text = "Red Skull" },
-            }
-            local meleeTexOrder = {
-                "Interface\\RAIDFRAME\\ReadyCheck-NotReady",
-                "Interface\\DialogFrame\\UI-Dialog-Icon-AlertNew",
-                "Interface\\Worldmap\\Skull_64Red",
-            }
-
-            local _, meleeCogShow = EllesmereUI.BuildCogPopup({
-                title = "Melee Indicator Settings",
-                rows = {
-                    { type = "slider", label = "Scale", min = 25, max = 200, step = 5,
-                      get = function()
-                          local pos = EllesmereUIDB and EllesmereUIDB.meleeIndicatorPos
-                          return floor(((pos and pos.scale) or 1.0) * 100 + 0.5)
-                      end,
-                      set = function(v)
-                          if not EllesmereUIDB then EllesmereUIDB = {} end
-                          if not EllesmereUIDB.meleeIndicatorPos then EllesmereUIDB.meleeIndicatorPos = {} end
-                          EllesmereUIDB.meleeIndicatorPos.scale = v / 100
-                          if EllesmereUI._applyMeleeIndicator then EllesmereUI._applyMeleeIndicator() end
-                      end },
-                    { type = "dropdown", label = "Texture",
-                      values = meleeTexValues, order = meleeTexOrder,
-                      get = function()
-                          return (EllesmereUIDB and EllesmereUIDB.meleeTexture) or "Interface\\RAIDFRAME\\ReadyCheck-NotReady"
-                      end,
-                      set = function(v)
-                          if not EllesmereUIDB then EllesmereUIDB = {} end
-                          EllesmereUIDB.meleeTexture = v
-                          if EllesmereUI._applyMeleeIndicator then EllesmereUI._applyMeleeIndicator() end
-                      end },
-                },
-            })
-            local meleeCogBtn = CreateFrame("Button", nil, rightRgn)
-            meleeCogBtn:SetSize(26, 26)
-            meleeCogBtn:SetPoint("RIGHT", rightRgn._lastInline or rightRgn._control, "LEFT", -9, 0)
-            rightRgn._lastInline = meleeCogBtn
-            meleeCogBtn:SetFrameLevel(rightRgn:GetFrameLevel() + 5)
-            meleeCogBtn:SetAlpha(meleeOff() and 0.15 or 0.4)
-            local meleeCogTex = meleeCogBtn:CreateTexture(nil, "OVERLAY")
-            meleeCogTex:SetAllPoints()
-            meleeCogTex:SetTexture(EllesmereUI.COGS_ICON)
-            meleeCogBtn:SetScript("OnEnter", function(self) self:SetAlpha(0.7) end)
-            meleeCogBtn:SetScript("OnLeave", function(self) self:SetAlpha(meleeOff() and 0.15 or 0.4) end)
-            meleeCogBtn:SetScript("OnClick", function(self) meleeCogShow(self) end)
-
-            local meleeCogBlock = CreateFrame("Frame", nil, meleeCogBtn)
-            meleeCogBlock:SetAllPoints()
-            meleeCogBlock:SetFrameLevel(meleeCogBtn:GetFrameLevel() + 10)
-            meleeCogBlock:EnableMouse(true)
-            meleeCogBlock:SetScript("OnEnter", function()
-                EllesmereUI.ShowWidgetTooltip(meleeCogBtn, EllesmereUI.DisabledTooltip("Out of Melee Indicator"))
-            end)
-            meleeCogBlock:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
-
-            EllesmereUI.RegisterWidgetRefresh(function()
-                if meleeOff() then
-                    meleeCogBtn:SetAlpha(0.15)
-                    meleeCogBlock:Show()
-                else
-                    meleeCogBtn:SetAlpha(0.4)
-                    meleeCogBlock:Hide()
-                end
-            end)
-            meleeCogBtn:SetAlpha(meleeOff() and 0.15 or 0.4)
-            if meleeOff() then meleeCogBlock:Show() else meleeCogBlock:Hide() end
-        end
-        --]] -- END DISABLED: Distance to Target / Melee Indicator
-
         _, h = W:Spacer(parent, y, 20);  y = y - h
 
         -------------------------------------------------------------------
@@ -1279,7 +1076,7 @@ initFrame:SetScript("OnEvent", function(self)
             { type="toggle", text="Auto Sell Junk",
               tooltip="Automatically sell all junk items when visiting a vendor.",
               getValue=function()
-                return EllesmereUIDB and EllesmereUIDB.autoSellJunk or false
+                return EllesmereUIDB.autoSellJunk ~= false
               end,
               setValue=function(v)
                 if not EllesmereUIDB then EllesmereUIDB = {} end
@@ -1646,7 +1443,7 @@ initFrame:SetScript("OnEvent", function(self)
             if ssInitOff then ssCogBlock:Show() else ssCogBlock:Hide() end
         end
 
-        -- Row 5: Character Crosshair (left, with inline swatch) | empty (right)
+        -- Row 5: Character Crosshair (left, with inline swatch) | Rested Indicator (right)
         local crosshairRow
         crosshairRow, h = W:DualRow(parent, y,
             { type="dropdown", text="Character Crosshair",
@@ -1662,7 +1459,21 @@ initFrame:SetScript("OnEvent", function(self)
                 if EllesmereUI._applyCrosshair then EllesmereUI._applyCrosshair() end
                 EllesmereUI:RefreshPage()
               end },
-            { type="label", text="" }
+            { type="toggle", text="Rested Indicator",
+              tooltip="Displays a ZZZ indicator on your player frame when you are in a resting area.",
+              getValue=function()
+                if not EllesmereUIDB then return true end
+                return EllesmereUIDB.showRestedIndicator == true
+              end,
+              setValue=function(v)
+                if not EllesmereUIDB then EllesmereUIDB = {} end
+                EllesmereUIDB.showRestedIndicator = v
+                local pf = _G["EllesmereUIUnitFrames_Player"]
+                if pf and pf._restIndicator then
+                    if v and IsResting() then pf._restIndicator:Show() else pf._restIndicator:Hide() end
+                end
+                EllesmereUI:RefreshPage()
+              end }
         );  y = y - h
 
         -- Inline color swatch on the crosshair dropdown (left region)
@@ -2363,7 +2174,7 @@ initFrame:SetScript("OnEvent", function(self)
             { type="dropdown", text="Outline Mode",
               tooltip="Controls the text rendering style used across all UI elements",
               values=outlineModeValues, order=outlineModeOrder,
-              getValue=function() return EllesmereUI.GetFontsDB().outlineMode or "shadow" end,
+              getValue=function() return EllesmereUI.GetFontsDB().outlineMode or "none" end,
               setValue=function(v)
                   EllesmereUI.GetFontsDB().outlineMode = v
                   local rl = EllesmereUI._widgetRefreshList
@@ -2595,10 +2406,12 @@ initFrame:SetScript("OnEvent", function(self)
     -- Register FPS counter as an unlock mode element
     C_Timer.After(1.5, function()
         if not EllesmereUI or not EllesmereUI.RegisterUnlockElements then return end
+        local MK = EllesmereUI.MakeUnlockElement
         EllesmereUI:RegisterUnlockElements({
-            {
+            MK({
                 key = "EUI_FPS",
                 label = "FPS Counter",
+                group = "General",
                 order = 700,
                 getFrame = function()
                     if not fpsFrame then CreateFPSCounter() end
@@ -2608,46 +2421,43 @@ initFrame:SetScript("OnEvent", function(self)
                     if fpsFrame then return fpsFrame:GetWidth(), fpsFrame:GetHeight() end
                     return 80, 20
                 end,
-                savePosition = function(key, point, relPoint, x, y, scale)
+                noResize = true,
+                savePos = function(key, point, relPoint, x, y)
                     if not EllesmereUIDB then EllesmereUIDB = {} end
                     if not point then return end
-                    EllesmereUIDB.fpsPos = { point = point, relPoint = relPoint, x = x, y = y, scale = scale }
+                    EllesmereUIDB.fpsPos = { point = point, relPoint = relPoint, x = x, y = y }
                     if fpsFrame then
-                        if scale then pcall(function() fpsFrame:SetScale(scale) end) end
                         fpsFrame:ClearAllPoints()
                         fpsFrame:SetPoint(point, UIParent, relPoint or point, x or 0, y or 0)
                     end
                 end,
-                loadPosition = function()
+                loadPos = function()
                     return EllesmereUIDB and EllesmereUIDB.fpsPos
                 end,
-                getScale = function()
-                    local pos = EllesmereUIDB and EllesmereUIDB.fpsPos
-                    return pos and pos.scale or 1.0
-                end,
-                clearPosition = function()
+                clearPos = function()
                     if EllesmereUIDB then EllesmereUIDB.fpsPos = nil end
                 end,
-                applyPosition = function()
+                applyPos = function()
                     if not fpsFrame then return end
                     local pos = EllesmereUIDB and EllesmereUIDB.fpsPos
                     if pos and pos.point then
-                        if pos.scale then pcall(function() fpsFrame:SetScale(pos.scale) end) end
                         fpsFrame:ClearAllPoints()
                         fpsFrame:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 0)
                     end
                 end,
-            },
+            }),
         })
     end)
 
     -- Register Secondary Stats as an unlock mode element
     C_Timer.After(1.5, function()
         if not EllesmereUI or not EllesmereUI.RegisterUnlockElements then return end
+        local MK = EllesmereUI.MakeUnlockElement
         EllesmereUI:RegisterUnlockElements({
-            {
+            MK({
                 key = "EUI_SecondaryStats",
                 label = "Secondary Stats",
+                group = "General",
                 order = 710,
                 getFrame = function()
                     local f = EllesmereUI._getSecondaryStatsFrame and EllesmereUI._getSecondaryStatsFrame()
@@ -2658,524 +2468,35 @@ initFrame:SetScript("OnEvent", function(self)
                     if f then return f:GetWidth(), f:GetHeight() end
                     return 160, 60
                 end,
-                savePosition = function(key, point, relPoint, x, y, scale)
+                noResize = true,
+                savePos = function(key, point, relPoint, x, y)
                     if not EllesmereUIDB then EllesmereUIDB = {} end
-                    if not point then
-                        -- No position to save (element was never positioned)
-                        return
-                    end
-                    EllesmereUIDB.secondaryStatsPos = { point = point, relPoint = relPoint, x = x, y = y, scale = scale }
+                    if not point then return end
+                    EllesmereUIDB.secondaryStatsPos = { point = point, relPoint = relPoint, x = x, y = y }
                     local f = EllesmereUI._getSecondaryStatsFrame and EllesmereUI._getSecondaryStatsFrame()
                     if f then
-                        if scale then pcall(function() f:SetScale(scale) end) end
                         f:ClearAllPoints()
                         f:SetPoint(point, UIParent, relPoint or point, x or 0, y or 0)
                     end
                 end,
-                loadPosition = function()
+                loadPos = function()
                     return EllesmereUIDB and EllesmereUIDB.secondaryStatsPos
                 end,
-                getScale = function()
-                    local pos = EllesmereUIDB and EllesmereUIDB.secondaryStatsPos
-                    return pos and pos.scale or 1.0
-                end,
-                clearPosition = function()
+                clearPos = function()
                     if EllesmereUIDB then EllesmereUIDB.secondaryStatsPos = nil end
                 end,
-                applyPosition = function()
+                applyPos = function()
                     local f = EllesmereUI._getSecondaryStatsFrame and EllesmereUI._getSecondaryStatsFrame()
                     if not f then return end
                     local pos = EllesmereUIDB and EllesmereUIDB.secondaryStatsPos
                     if pos and pos.point then
-                        if pos.scale then pcall(function() f:SetScale(pos.scale) end) end
                         f:ClearAllPoints()
                         f:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 0)
                     end
                 end,
-            },
+            }),
         })
     end)
-
-    ---------------------------------------------------------------------------
-    --  DISABLED: Runtime: Distance to Target & Out of Melee Indicator (WIP)
-    ---------------------------------------------------------------------------
-    --[[
-    do
-        local distFrame, distText
-        local meleeFrame, meleeTex
-        local rangeUpdateFrame
-        local RANGE_THROTTLE = 0.15
-        local rangeElapsed = 0
-
-        -------------------------------------------------------------------
-        --  Range Check Data
-        --
-        --  Each entry: { range_yards, item_id }
-        --  item_id is passed to C_Item.IsItemInRange.
-        --
-        --  Tables are sorted ascending by range.  The range estimator walks
-        --  the list and returns the bracket [prevRange, range] for the
-        --  first check that returns true.
-        -------------------------------------------------------------------
-
-        ---- Melee spell for indicator (accounts for hitbox, unlike items) --
-        -- Keyed by spec ID (GetSpecializationInfo).  One spell per melee
-        -- spec; ranged specs are absent -- indicator hides automatically.
-        -- Recached on PLAYER_SPECIALIZATION_CHANGED.
-        local MELEE_SPELL_BY_SPEC = {
-            -- Death Knight (all melee)
-            [250]  = 47528,   -- Blood:         Mind Freeze
-            [251]  = 47528,   -- Frost:         Mind Freeze
-            [252]  = 47528,   -- Unholy:        Mind Freeze
-            -- Demon Hunter (all melee)
-            [577]  = 162794,  -- Havoc:         Chaos Strike
-            [581]  = 263642,  -- Vengeance:     Fracture
-            -- Druid (Feral + Guardian are melee)
-            [103]  = 5221,    -- Feral:         Shred
-            [104]  = 33917,   -- Guardian:      Mangle
-            -- Hunter (Survival only)
-            [255]  = 186270,  -- Survival:      Raptor Strike
-            -- Monk (all specs go into melee)
-            [268]  = 100780,  -- Brewmaster:    Tiger Palm
-            [269]  = 100780,  -- Windwalker:    Tiger Palm
-            [270]  = 100780,  -- Mistweaver:    Tiger Palm
-            -- Paladin (Prot + Ret are melee; Holy has no reliable melee spell)
-            [66]   = 96231,   -- Protection:    Rebuke
-            [70]   = 96231,   -- Retribution:   Rebuke
-            -- Rogue (all melee)
-            [259]  = 1766,    -- Assassination: Kick
-            [260]  = 1766,    -- Outlaw:        Kick
-            [261]  = 1766,    -- Subtlety:      Kick
-            -- Shaman (Enhancement only)
-            [263]  = 73899,   -- Enhancement:   Primal Strike
-            -- Warrior (all melee)
-            [71]   = 6552,    -- Arms:          Pummel
-            [72]   = 6552,    -- Fury:          Pummel
-            [73]   = 6552,    -- Protection:    Pummel
-        }
-
-        local cachedMeleeSpell          -- spell ID or false (ranged spec)
-        local meleeSpellResolved = false
-
-        local function GetMeleeSpell()
-            if meleeSpellResolved then return cachedMeleeSpell end
-            meleeSpellResolved = true
-            local specIndex = GetSpecialization()
-            if specIndex then
-                local specID = GetSpecializationInfo(specIndex)
-                cachedMeleeSpell = specID and MELEE_SPELL_BY_SPEC[specID] or false
-            else
-                cachedMeleeSpell = false
-            end
-            return cachedMeleeSpell
-        end
-
-        --- Returns true (in melee), false (out of melee), or nil (ranged spec).
-        local function CheckMeleeRange(unit)
-            local spellID = GetMeleeSpell()
-            if not spellID then return nil end
-            local ok, result = pcall(C_Spell.IsSpellInRange, spellID, unit)
-            if ok and result ~= nil then return result end
-            return nil
-        end
-
-        ---- Use /scanrange to find items for range checking ---------------
-        ---- Hostile range checks ------------------------------------------
-        local RANGE_HARM = {
-            {   5,   8149 },    -- Voodoo Charm
-            {  10,   9606 },    -- Treant Muisek Vessel
-            {  15,   30651},    -- Dertok's First Wand
-            {  20,   1191},     -- Bag of Marbles
-            {  25,   13289},    -- Egan's Blaster
-            {  30,   835 },     -- Large Rope Net
-            {  35,   18904},    -- Zorbin's Ultra-Shrinker
-            {  40,   4945 },    -- Faintly Glowing Skull
-        }
-
-        ---- Friendly range checks -----------------------------------------
-        local RANGE_HELP = {
-            {   5,   1970 },    -- Restoring Balm
-            {  10,   17626},    -- Frostwolf Muzzle
-            {  15,   1251},     -- Linen Bandage
-            {  20,   17757},    -- Amulet of Spirits
-            {  25,   13289},    -- Egan's Blaster
-            {  30,   954},      -- Scroll of Strength
-            {  35,   18904},    -- Zorbin's Ultra-Shrinker
-            {  40,   1713},     -- Ankh of Life
-        }
-
-        -------------------------------------------------------------------
-        --  Range estimation
-        -------------------------------------------------------------------
-        local function GetRangeEstimate(unit)
-            if not UnitExists(unit) then return nil, nil end
-            local isEnemy = UnitCanAttack("player", unit)
-            local checks = isEnemy and RANGE_HARM or RANGE_HELP
-            local prevRange = 0
-            for _, entry in ipairs(checks) do
-                local range, checker = entry[1], entry[2]
-                local ok, inRange = pcall(C_Item.IsItemInRange, checker, unit)
-                if ok and inRange == true then
-                    return prevRange, range
-                elseif ok and inRange == false then
-                    prevRange = range
-                end
-            end
-            return prevRange, nil
-        end
-
-        -------------------------------------------------------------------
-        --  Distance color (discrete buckets)
-        -------------------------------------------------------------------
-        local DIST_COLORS = {
-            {  5, 0.0, 1.0, 0.0 },   -- green: melee
-            { 20, 1.0, 1.0, 0.0 },   -- yellow: control range
-            { 25, 1.0, 0.75, 0.0 },  -- yellow-orange: evoker range
-            { 30, 1.0, 0.5, 0.0 },   -- orange: short range spells
-            { 40, 1.0, 0.25, 0.0 },  -- red-orange: standard range
-        }
-        local DIST_COLOR_FAR = { 1.0, 0.0, 0.0 }
-
-        local function GetDistColor(maxRange)
-            if not maxRange then
-                return DIST_COLOR_FAR[1], DIST_COLOR_FAR[2], DIST_COLOR_FAR[3]
-            end
-            for _, entry in ipairs(DIST_COLORS) do
-                if maxRange <= entry[1] then
-                    return entry[2], entry[3], entry[4]
-                end
-            end
-            return DIST_COLOR_FAR[1], DIST_COLOR_FAR[2], DIST_COLOR_FAR[3]
-        end
-
-        -------------------------------------------------------------------
-        --  Update loop
-        -------------------------------------------------------------------
-        local inCombat = false
-
-        local function UpdateRangeIndicators()
-            local showDist  = EllesmereUIDB and EllesmereUIDB.showDistanceText
-            local showMelee = EllesmereUIDB and EllesmereUIDB.showMeleeIndicator
-
-            -- Early out: nothing to do
-            if not showDist and not showMelee then
-                if distFrame  then distFrame:Hide()  end
-                if meleeFrame then meleeFrame:Hide() end
-                return
-            end
-
-            if not UnitExists("target") then
-                if distFrame  then distFrame:Hide()  end
-                if meleeFrame then meleeFrame:Hide() end
-                return
-            end
-
-            -- Only run the expensive item-based range scan when distance
-            -- text is enabled.  The melee indicator uses spell range only.
-            local minRange, maxRange
-            if showDist then
-                minRange, maxRange = GetRangeEstimate("target")
-            end
-
-            -- Snap to 5-yard increments for cleaner display
-            local dispMin = minRange and (floor(minRange / 5) * 5) or nil
-            local dispMax = maxRange and (ceil(maxRange / 5) * 5) or nil
-
-            -- Distance text
-            if showDist and distFrame then
-                if dispMin and dispMax then
-                    distText:SetText(dispMin .. " - " .. dispMax)
-                elseif dispMin and not dispMax then
-                    distText:SetText(dispMin .. "+")
-                else
-                    distText:SetText("?")
-                end
-                local useRangeColor = not (EllesmereUIDB and EllesmereUIDB.distanceFixedColor)
-                if useRangeColor then
-                    distText:SetTextColor(GetDistColor(maxRange))
-                else
-                    local c = EllesmereUIDB and EllesmereUIDB.distanceTextColor
-                    if c then
-                        distText:SetTextColor(c.r, c.g, c.b)
-                    else
-                        distText:SetTextColor(1, 1, 1)
-                    end
-                end
-                local tw = distText:GetStringWidth() + 8
-                local th = distText:GetStringHeight() + 4
-                distFrame:SetSize(max(tw, 40), max(th, 20))
-                distFrame:Show()
-            elseif distFrame then
-                distFrame:Hide()
-            end
-
-            -- Melee indicator (combat-only, melee specs only)
-            if showMelee and meleeFrame then
-                if not inCombat then
-                    meleeFrame:Hide()
-                else
-                    local meleeResult = CheckMeleeRange("target")
-                    if meleeResult == nil then
-                        meleeFrame:Hide()
-                    elseif meleeResult then
-                        meleeFrame:Hide()
-                    else
-                        meleeFrame:Show()
-                    end
-                end
-            elseif meleeFrame then
-                meleeFrame:Hide()
-            end
-        end
-
-        local function OnRangeUpdate(self, dt)
-            rangeElapsed = rangeElapsed + dt
-            if rangeElapsed < RANGE_THROTTLE then return end
-            rangeElapsed = 0
-            UpdateRangeIndicators()
-        end
-
-        local function EnsureUpdateFrame()
-            if not rangeUpdateFrame then
-                rangeUpdateFrame = CreateFrame("Frame")
-                rangeUpdateFrame:SetScript("OnEvent", function(_, event)
-                    if event == "PLAYER_REGEN_DISABLED" then
-                        inCombat = true
-                    elseif event == "PLAYER_REGEN_ENABLED" then
-                        inCombat = false
-                        if meleeFrame then meleeFrame:Hide() end
-                    elseif event == "PLAYER_SPECIALIZATION_CHANGED" then
-                        -- Re-resolve melee spell on spec change
-                        meleeSpellResolved = false
-                        cachedMeleeSpell = nil
-                    else
-                        rangeElapsed = RANGE_THROTTLE
-                    end
-                end)
-            end
-            local needDist  = EllesmereUIDB and EllesmereUIDB.showDistanceText
-            local needMelee = EllesmereUIDB and EllesmereUIDB.showMeleeIndicator
-            if needDist or needMelee then
-                rangeUpdateFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
-                rangeUpdateFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
-                rangeUpdateFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
-                rangeUpdateFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
-                rangeUpdateFrame:SetScript("OnUpdate", OnRangeUpdate)
-                inCombat = InCombatLockdown()
-            else
-                rangeUpdateFrame:UnregisterAllEvents()
-                rangeUpdateFrame:SetScript("OnUpdate", nil)
-                if distFrame  then distFrame:Hide()  end
-                if meleeFrame then meleeFrame:Hide() end
-            end
-        end
-
-        -------------------------------------------------------------------
-        --  Distance text frame
-        -------------------------------------------------------------------
-        local function CreateDistanceFrame()
-            if distFrame then return end
-            distFrame = CreateFrame("Frame", "EUI_DistanceText", UIParent)
-            distFrame:SetSize(80, 30)
-            distFrame:SetFrameStrata("HIGH")
-            distFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-            distFrame:EnableMouse(false)
-
-            distText = distFrame:CreateFontString(nil, "OVERLAY")
-            local font = EllesmereUI.ResolveFontName(EllesmereUI.GetFontsDB().global)
-            local fontSize = (EllesmereUIDB and EllesmereUIDB.distanceFontSize) or 16
-            distText:SetFont(font, fontSize, EllesmereUI.GetFontOutlineFlag())
-            if EllesmereUI.GetFontUseShadow() then distText:SetShadowOffset(1, -1) end
-            distText:SetPoint("CENTER")
-            distText:SetJustifyH("CENTER")
-        end
-
-        local function ApplyDistanceText()
-            local enabled = EllesmereUIDB and EllesmereUIDB.showDistanceText
-            if not enabled then
-                if distFrame then distFrame:Hide() end
-                EnsureUpdateFrame()
-                return
-            end
-            if not distFrame then CreateDistanceFrame() end
-            local pos = EllesmereUIDB and EllesmereUIDB.distanceTextPos
-            if pos then
-                if pos.scale then pcall(function() distFrame:SetScale(pos.scale) end) end
-                if pos.point then
-                    distFrame:ClearAllPoints()
-                    distFrame:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 0)
-                end
-            end
-            local font = EllesmereUI.ResolveFontName(EllesmereUI.GetFontsDB().global)
-            local fontSize = (EllesmereUIDB and EllesmereUIDB.distanceFontSize) or 16
-            distText:SetFont(font, fontSize, EllesmereUI.GetFontOutlineFlag())
-            if EllesmereUI.GetFontUseShadow() then
-                distText:SetShadowOffset(1, -1)
-            else
-                distText:SetShadowOffset(0, 0)
-            end
-            EnsureUpdateFrame()
-        end
-
-        EllesmereUI._applyDistanceText = ApplyDistanceText
-        EllesmereUI._getDistanceFrame = function()
-            if not distFrame then CreateDistanceFrame() end
-            return distFrame
-        end
-
-        -------------------------------------------------------------------
-        --  Melee indicator frame
-        -------------------------------------------------------------------
-        local function CreateMeleeFrame()
-            if meleeFrame then return end
-            meleeFrame = CreateFrame("Frame", "EUI_MeleeIndicator", UIParent)
-            meleeFrame:SetSize(48, 48)
-            meleeFrame:SetFrameStrata("HIGH")
-            meleeFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-            meleeFrame:EnableMouse(false)
-
-            meleeTex = meleeFrame:CreateTexture(nil, "OVERLAY")
-            meleeTex:SetAllPoints()
-            local texPath = (EllesmereUIDB and EllesmereUIDB.meleeTexture) or "Interface\\RAIDFRAME\\ReadyCheck-NotReady"
-            meleeTex:SetTexture(texPath)
-            meleeTex:SetVertexColor(1, 0, 0)
-        end
-
-        local function ApplyMeleeIndicator()
-            local enabled = EllesmereUIDB and EllesmereUIDB.showMeleeIndicator
-            if not enabled then
-                if meleeFrame then meleeFrame:Hide() end
-                EnsureUpdateFrame()
-                return
-            end
-            if not meleeFrame then CreateMeleeFrame() end
-            local texPath = (EllesmereUIDB and EllesmereUIDB.meleeTexture) or "Interface\\RAIDFRAME\\ReadyCheck-NotReady"
-            meleeTex:SetTexture(texPath)
-            meleeTex:SetVertexColor(1, 0, 0)
-            local pos = EllesmereUIDB and EllesmereUIDB.meleeIndicatorPos
-            if pos then
-                if pos.scale then pcall(function() meleeFrame:SetScale(pos.scale) end) end
-                if pos.point then
-                    meleeFrame:ClearAllPoints()
-                    meleeFrame:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 0)
-                end
-            end
-            EnsureUpdateFrame()
-        end
-
-        EllesmereUI._applyMeleeIndicator = ApplyMeleeIndicator
-        EllesmereUI._getMeleeFrame = function()
-            if not meleeFrame then CreateMeleeFrame() end
-            return meleeFrame
-        end
-
-        -- Apply on login
-        C_Timer.After(1, function()
-            if EllesmereUIDB and EllesmereUIDB.showDistanceText then
-                ApplyDistanceText()
-            end
-            if EllesmereUIDB and EllesmereUIDB.showMeleeIndicator then
-                ApplyMeleeIndicator()
-            end
-        end)
-    end
-    --]] -- END DISABLED: Runtime Distance/Melee
-
-    --[[ DISABLED: Unlock mode registration for Distance/Melee (WIP)
-    C_Timer.After(1.5, function()
-        if not EllesmereUI or not EllesmereUI.RegisterUnlockElements then return end
-        EllesmereUI:RegisterUnlockElements({
-            {
-                key = "EUI_DistanceText",
-                label = "Distance Text",
-                order = 720,
-                getFrame = function()
-                    return EllesmereUI._getDistanceFrame and EllesmereUI._getDistanceFrame()
-                end,
-                getSize = function()
-                    local f = EllesmereUI._getDistanceFrame and EllesmereUI._getDistanceFrame()
-                    if f then return f:GetWidth(), f:GetHeight() end
-                    return 80, 30
-                end,
-                savePosition = function(key, point, relPoint, x, y, scale)
-                    if not EllesmereUIDB then EllesmereUIDB = {} end
-                    if not point then return end
-                    EllesmereUIDB.distanceTextPos = { point = point, relPoint = relPoint, x = x, y = y, scale = scale }
-                    local f = EllesmereUI._getDistanceFrame and EllesmereUI._getDistanceFrame()
-                    if f then
-                        if scale then pcall(function() f:SetScale(scale) end) end
-                        f:ClearAllPoints()
-                        f:SetPoint(point, UIParent, relPoint or point, x or 0, y or 0)
-                    end
-                end,
-                loadPosition = function()
-                    return EllesmereUIDB and EllesmereUIDB.distanceTextPos
-                end,
-                getScale = function()
-                    local pos = EllesmereUIDB and EllesmereUIDB.distanceTextPos
-                    return pos and pos.scale or 1.0
-                end,
-                clearPosition = function()
-                    if EllesmereUIDB then EllesmereUIDB.distanceTextPos = nil end
-                end,
-                applyPosition = function()
-                    local f = EllesmereUI._getDistanceFrame and EllesmereUI._getDistanceFrame()
-                    if not f then return end
-                    local pos = EllesmereUIDB and EllesmereUIDB.distanceTextPos
-                    if pos and pos.point then
-                        if pos.scale then pcall(function() f:SetScale(pos.scale) end) end
-                        f:ClearAllPoints()
-                        f:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 0)
-                    end
-                end,
-            },
-            {
-                key = "EUI_MeleeIndicator",
-                label = "Melee Indicator",
-                order = 721,
-                getFrame = function()
-                    return EllesmereUI._getMeleeFrame and EllesmereUI._getMeleeFrame()
-                end,
-                getSize = function()
-                    local f = EllesmereUI._getMeleeFrame and EllesmereUI._getMeleeFrame()
-                    if f then return f:GetWidth(), f:GetHeight() end
-                    return 48, 48
-                end,
-                savePosition = function(key, point, relPoint, x, y, scale)
-                    if not EllesmereUIDB then EllesmereUIDB = {} end
-                    if not point then return end
-                    EllesmereUIDB.meleeIndicatorPos = { point = point, relPoint = relPoint, x = x, y = y, scale = scale }
-                    local f = EllesmereUI._getMeleeFrame and EllesmereUI._getMeleeFrame()
-                    if f then
-                        if scale then pcall(function() f:SetScale(scale) end) end
-                        f:ClearAllPoints()
-                        f:SetPoint(point, UIParent, relPoint or point, x or 0, y or 0)
-                    end
-                end,
-                loadPosition = function()
-                    return EllesmereUIDB and EllesmereUIDB.meleeIndicatorPos
-                end,
-                getScale = function()
-                    local pos = EllesmereUIDB and EllesmereUIDB.meleeIndicatorPos
-                    return pos and pos.scale or 1.0
-                end,
-                clearPosition = function()
-                    if EllesmereUIDB then EllesmereUIDB.meleeIndicatorPos = nil end
-                end,
-                applyPosition = function()
-                    local f = EllesmereUI._getMeleeFrame and EllesmereUI._getMeleeFrame()
-                    if not f then return end
-                    local pos = EllesmereUIDB and EllesmereUIDB.meleeIndicatorPos
-                    if pos and pos.point then
-                        if pos.scale then pcall(function() f:SetScale(pos.scale) end) end
-                        f:ClearAllPoints()
-                        f:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 0)
-                    end
-                end,
-            },
-        })
-    end)
-    --]] -- END DISABLED: Unlock mode registration for Distance/Melee
 
     -- Hidden button for FPS keybind toggle
     local fpsBind = CreateFrame("Button", "EUI_FPSBindBtn", UIParent)
@@ -3218,7 +2539,7 @@ initFrame:SetScript("OnEvent", function(self)
         if not EllesmereUIDB then return end
 
         -- Auto sell junk
-        if EllesmereUIDB.autoSellJunk then
+        if EllesmereUIDB.autoSellJunk ~= false then
             local soldCount = 0
             for bag = 0, 4 do
                 for slot = 1, C_Container.GetContainerNumSlots(bag) do
@@ -3290,8 +2611,7 @@ initFrame:SetScript("OnEvent", function(self)
                 local yOff = EllesmereUIDB and EllesmereUIDB.durWarnYOffset or 250
                 durWarnOverlay:SetPoint("CENTER", UIParent, "CENTER", 0, yOff)
             end
-            local scale = (EllesmereUIDB and EllesmereUIDB.durWarnScale or 100) / 100
-            durWarnOverlay:SetScale(scale)
+            durWarnOverlay:SetScale(1)
 
             -- Font — pull from the global "extras" font key
             local fontPath = EllesmereUI.GetFontPath("extras")
@@ -3589,39 +2909,6 @@ initFrame:SetScript("OnEvent", function(self)
         local EG = EllesmereUI.ELLESMERE_GREEN
         local MEDIA = "Interface\\AddOns\\EllesmereUI\\media\\"
 
-        -- Safety net: verify the active profile matches the current spec
-        -- assignment. If the user opens settings while on the wrong profile
-        -- (e.g. spec info was unavailable at login), correct it now.
-        do
-            local si = GetSpecialization and GetSpecialization() or 0
-            local sid = si and si > 0 and GetSpecializationInfo(si) or nil
-            if sid then
-                local assigned = EllesmereUI.GetSpecProfile(sid)
-                if assigned then
-                    local current = EllesmereUI.GetActiveProfileName()
-                    if assigned ~= current then
-                        local _, profiles = EllesmereUI.GetProfileList()
-                        if profiles and profiles[assigned] then
-                            -- Save current state before switching
-                            EllesmereUI.AutoSaveActiveProfile()
-                            local fontWillChange = EllesmereUI.ProfileChangesFont(profiles[assigned])
-                            EllesmereUI.SwitchProfile(assigned)
-                            EllesmereUI.RefreshAllAddons()
-                            if fontWillChange then
-                                EllesmereUI:ShowConfirmPopup({
-                                    title       = "Reload Required",
-                                    message     = "Font changed. A UI reload is needed to apply the new font.",
-                                    confirmText = "Reload Now",
-                                    cancelText  = "Later",
-                                    onConfirm   = function() ReloadUI() end,
-                                })
-                            end
-                        end
-                    end
-                end
-            end
-        end
-
         parent._showRowDivider = false
 
         -- Button colours matching dropdown border style
@@ -3769,6 +3056,25 @@ initFrame:SetScript("OnEvent", function(self)
             PP.Point(exportBtn, "TOPLEFT", rowFrame, "TOPLEFT", startX, -math.floor((ROW_H - ITEM_H) / 2))
             exportBtn:SetFrameLevel(rowFrame:GetFrameLevel() + 2)
             EllesmereUI.MakeStyledButton(exportBtn, "Export Profile", 13, PROF_BTN_COLOURS, function()
+                -- If CDM is loaded, show spec picker before exporting
+                if C_AddOns.IsAddOnLoaded("EllesmereUICooldownManager") then
+                    local specInfo = EllesmereUI.GetCDMSpecInfo()
+                    if #specInfo > 0 then
+                        for _, sp in ipairs(specInfo) do sp.checked = sp.hasData end
+                        EllesmereUI:ShowCDMSpecPickerPopup({
+                            title       = "Choose Your Included CDM Spell Assignments",
+                            subtitle    = "Select all specs you want included with your exported profile",
+                            confirmText = "Export",
+                            specs       = specInfo,
+                            onConfirm   = function(sel)
+                                local str = EllesmereUI.ExportCurrentProfile(sel)
+                                if str then EllesmereUI:ShowExportPopup(str) end
+                            end,
+                            onCancel    = function() end,
+                        })
+                        return
+                    end
+                end
                 local str = EllesmereUI.ExportCurrentProfile()
                 if str then EllesmereUI:ShowExportPopup(str) end
             end)
@@ -3807,26 +3113,94 @@ initFrame:SetScript("OnEvent", function(self)
                         scaleWarning = scaleWarnText,
                         onConfirm   = function(name)
                             if not name or name == "" then return end
+                            -- Grab the imported CDM data for the spec picker
+                            local importedCDMSnap
+                            if C_AddOns.IsAddOnLoaded("EllesmereUICooldownManager") then
+                                if payload and payload.data and payload.data.addons then
+                                    importedCDMSnap = payload.data.addons["EllesmereUICooldownManager"]
+                                end
+                            end
+
                             local ok, err, status = EllesmereUI.ImportProfile(importStr, name)
+
                             if ok and status == "spec_locked" then
                                 EllesmereUI:ShowInfoPopup({
                                     title   = "Profile Imported",
                                     content = "\"" .. name .. "\" was saved but cannot be loaded because this spec has an assigned profile. Switch specs or remove the spec assignment to use it.",
                                 })
                             elseif ok then
-                                local fontWillChange = EllesmereUI.ProfileChangesFont(payload and payload.data)
-                                EllesmereUI.RefreshAllAddons()
-                                ddLabel:SetText(EllesmereUI.GetActiveProfileName())
-                                if fontWillChange then
-                                    EllesmereUI:ShowConfirmPopup({
-                                        title       = "Reload Required",
-                                        message     = "Font changed. A UI reload is needed to apply the new font.",
-                                        confirmText = "Reload Now",
-                                        cancelText  = "Later",
-                                        onConfirm   = function() ReloadUI() end,
+                                -- Show spec picker if imported data has CDM specProfiles
+                                local importedSpecInfo = importedCDMSnap
+                                    and EllesmereUI.GetImportedCDMSpecInfo(importedCDMSnap)
+                                if importedSpecInfo and #importedSpecInfo > 0 then
+                                    for _, sp in ipairs(importedSpecInfo) do sp.checked = true end
+                                    local fontWillChange = EllesmereUI.ProfileChangesFont(payload and payload.data)
+                                    EllesmereUI:ShowCDMSpecPickerPopup({
+                                        title       = "Choose Your Included CDM Spell Assignments",
+                                        subtitle    = "Select all specs you want included with your imported profile",
+                                        confirmText = "Apply",
+                                        specs       = importedSpecInfo,
+                                        onConfirm   = function(sel)
+                                            EllesmereUI.ApplyImportedSpecProfiles(importedCDMSnap, sel)
+                                            -- Reload current spec to restore spell assignments;
+                                            -- ApplyImportedSpecProfiles already handles overwriting
+                                            -- selected specs, and LoadSpecProfile will load the
+                                            -- (now-updated) data for the current spec.
+                                            if _G._ECME_LoadSpecProfile and _G._ECME_GetCurrentSpecKey then
+                                                local curKey = _G._ECME_GetCurrentSpecKey()
+                                                if curKey then _G._ECME_LoadSpecProfile(curKey) end
+                                            end
+                                            EllesmereUI.RefreshAllAddons()
+                                            ddLabel:SetText(EllesmereUI.GetActiveProfileName())
+                                            if fontWillChange then
+                                                EllesmereUI:ShowConfirmPopup({
+                                                    title       = "Reload Required",
+                                                    message     = "Font changed. A UI reload is needed to apply the new font.",
+                                                    confirmText = "Reload Now",
+                                                    cancelText  = "Later",
+                                                    onConfirm   = function() ReloadUI() end,
+                                                })
+                                            else
+                                                EllesmereUI:RefreshPage()
+                                            end
+                                        end,
+                                        onCancel = function()
+                                            -- User cancelled spec picker: reload current spec profile
+                                            -- to restore spell assignments that ApplyProfileData overwrote
+                                            if _G._ECME_LoadSpecProfile and _G._ECME_GetCurrentSpecKey then
+                                                local curKey = _G._ECME_GetCurrentSpecKey()
+                                                if curKey then _G._ECME_LoadSpecProfile(curKey) end
+                                            end
+                                            EllesmereUI.RefreshAllAddons()
+                                            ddLabel:SetText(EllesmereUI.GetActiveProfileName())
+                                            if fontWillChange then
+                                                EllesmereUI:ShowConfirmPopup({
+                                                    title       = "Reload Required",
+                                                    message     = "Font changed. A UI reload is needed to apply the new font.",
+                                                    confirmText = "Reload Now",
+                                                    cancelText  = "Later",
+                                                    onConfirm   = function() ReloadUI() end,
+                                                })
+                                            else
+                                                EllesmereUI:RefreshPage()
+                                            end
+                                        end,
                                     })
                                 else
-                                    EllesmereUI:RefreshPage()
+                                    local fontWillChange = EllesmereUI.ProfileChangesFont(payload and payload.data)
+                                    EllesmereUI.RefreshAllAddons()
+                                    ddLabel:SetText(EllesmereUI.GetActiveProfileName())
+                                    if fontWillChange then
+                                        EllesmereUI:ShowConfirmPopup({
+                                            title       = "Reload Required",
+                                            message     = "Font changed. A UI reload is needed to apply the new font.",
+                                            confirmText = "Reload Now",
+                                            cancelText  = "Later",
+                                            onConfirm   = function() ReloadUI() end,
+                                        })
+                                    else
+                                        EllesmereUI:RefreshPage()
+                                    end
                                 end
                             else
                                 EllesmereUI:ShowInfoPopup({ title = "Import Failed", content = err or "Unknown error" })
@@ -3869,6 +3243,7 @@ initFrame:SetScript("OnEvent", function(self)
                         onApply = function()
                             if not spot.exportString then return end
                             local spotPayload = EllesmereUI.DecodeImportString(spot.exportString)
+                            local spotScaleWarn = BuildScaleWarning(spotPayload)
                             local ok, err, status = EllesmereUI.ImportProfile(spot.exportString, UniquePresetName("Weekly: " .. spot.name))
                             if ok and status == "spec_locked" then
                                 EllesmereUI:ShowInfoPopup({
@@ -3881,11 +3256,20 @@ initFrame:SetScript("OnEvent", function(self)
                                 ddLabel:SetText(EllesmereUI.GetActiveProfileName())
                                 if fontWillChange then
                                     EllesmereUI:ShowConfirmPopup({
-                                        title       = "Reload Required",
-                                        message     = "Font changed. A UI reload is needed to apply the new font.",
-                                        confirmText = "Reload Now",
-                                        cancelText  = "Later",
-                                        onConfirm   = function() ReloadUI() end,
+                                        title        = "Reload Required",
+                                        message      = "Font changed. A UI reload is needed to apply the new font.",
+                                        confirmText  = "Reload Now",
+                                        cancelText   = "Later",
+                                        scaleWarning = spotScaleWarn,
+                                        onConfirm    = function() ReloadUI() end,
+                                    })
+                                elseif spotScaleWarn then
+                                    EllesmereUI:ShowConfirmPopup({
+                                        title        = "Preset Applied",
+                                        message      = "\"Weekly: " .. spot.name .. "\" has been applied.",
+                                        confirmText  = "OK",
+                                        cancelText   = "Close",
+                                        scaleWarning = spotScaleWarn,
                                     })
                                 else
                                     EllesmereUI:RefreshPage()
@@ -3900,6 +3284,8 @@ initFrame:SetScript("OnEvent", function(self)
                         presetEntries[#presetEntries + 1] = {
                             label = p.name,
                             onApply = function()
+                                local pPayload = EllesmereUI.DecodeImportString(p.exportString)
+                                local pScaleWarn = BuildScaleWarning(pPayload)
                                 local ok, err, status = EllesmereUI.ImportProfile(p.exportString, UniquePresetName(p.name))
                                 if ok and status == "spec_locked" then
                                     EllesmereUI:ShowInfoPopup({
@@ -3907,17 +3293,25 @@ initFrame:SetScript("OnEvent", function(self)
                                         content = "Profile was saved but cannot be loaded because this spec has an assigned profile.",
                                     })
                                 elseif ok then
-                                    local pPayload = EllesmereUI.DecodeImportString(p.exportString)
                                     local fontWillChange = EllesmereUI.ProfileChangesFont(pPayload and pPayload.data)
                                     EllesmereUI.RefreshAllAddons()
                                     ddLabel:SetText(EllesmereUI.GetActiveProfileName())
                                     if fontWillChange then
                                         EllesmereUI:ShowConfirmPopup({
-                                            title       = "Reload Required",
-                                            message     = "Font changed. A UI reload is needed to apply the new font.",
-                                            confirmText = "Reload Now",
-                                            cancelText  = "Later",
-                                            onConfirm   = function() ReloadUI() end,
+                                            title        = "Reload Required",
+                                            message      = "Font changed. A UI reload is needed to apply the new font.",
+                                            confirmText  = "Reload Now",
+                                            cancelText   = "Later",
+                                            scaleWarning = pScaleWarn,
+                                            onConfirm    = function() ReloadUI() end,
+                                        })
+                                    elseif pScaleWarn then
+                                        EllesmereUI:ShowConfirmPopup({
+                                            title        = "Preset Applied",
+                                            message      = "\"" .. p.name .. "\" has been applied.",
+                                            confirmText  = "OK",
+                                            cancelText   = "Close",
+                                            scaleWarning = pScaleWarn,
                                         })
                                     else
                                         EllesmereUI:RefreshPage()
@@ -4264,7 +3658,7 @@ initFrame:SetScript("OnEvent", function(self)
 
                             local kbBtn = CreateFrame("Button", nil, itm)
                             kbBtn:SetSize(X_SZ, X_SZ)
-                            kbBtn:SetPoint("RIGHT", editBtn, "LEFT", -4, 0)
+                            kbBtn:SetPoint("RIGHT", xBtn, "LEFT", -4, 0)
                             kbBtn:SetFrameLevel(itm:GetFrameLevel() + 2)
                             local kbIcon = kbBtn:CreateTexture(nil, "OVERLAY")
                             kbIcon:SetAllPoints()
@@ -4274,11 +3668,11 @@ initFrame:SetScript("OnEvent", function(self)
                             itm._kbBtn = kbBtn
 
                             local function IsOverInlineBtn()
-                                return xBtn:IsMouseOver() or editBtn:IsMouseOver() or kbBtn:IsMouseOver()
+                                return xBtn:IsMouseOver() or kbBtn:IsMouseOver()
                             end
 
                             local function SetAllInlineAlpha(a)
-                                xBtn:SetAlpha(a); editBtn:SetAlpha(a); kbBtn:SetAlpha(a)
+                                xBtn:SetAlpha(a); kbBtn:SetAlpha(a)
                             end
 
                             itm:SetScript("OnEnter", function()
@@ -4317,14 +3711,6 @@ initFrame:SetScript("OnEvent", function(self)
                                 InlineBtnLeave(self)
                                 EllesmereUI.HideWidgetTooltip()
                             end)
-                            editBtn:SetScript("OnEnter", function(self)
-                                InlineBtnEnter(self)
-                                EllesmereUI.ShowWidgetTooltip(self, "Rename")
-                            end)
-                            editBtn:SetScript("OnLeave", function(self)
-                                InlineBtnLeave(self)
-                                EllesmereUI.HideWidgetTooltip()
-                            end)
                             kbBtn:SetScript("OnEnter", function(self)
                                 InlineBtnEnter(self)
                                 EllesmereUI.ShowWidgetTooltip(self, "Keybind")
@@ -4343,115 +3729,87 @@ initFrame:SetScript("OnEvent", function(self)
                         itm._hl:SetAlpha(itm._isSel and 0.04 or 0)
 
                         local capName = name
-                        local specLocked = specAssigned and specAssigned ~= capName
+                        local iLbl, iHl, iXBtn, iEditBtn, iKbBtn = itm._lbl, itm._hl, itm._xBtn, itm._editBtn, itm._kbBtn
+iLbl:SetTextColor(1, 1, 1, EllesmereUI.TEXT_DIM_A)
+iEditBtn:Hide()  -- rename disabled; name is set at creation
 
-                        if specLocked then
-                            -- Disable: dim label, hide X, edit, and keybind, block clicks, show tooltip
-                            itm._lbl:SetTextColor(1, 1, 1, 0.25)
-                            itm._xBtn:Hide()
-                            itm._editBtn:Hide()
-                            itm._kbBtn:Hide()
-                            itm:SetScript("OnClick", nil)
-                            itm:SetScript("OnEnter", function()
-                                EllesmereUI.ShowWidgetTooltip(itm, "This spec has an assigned profile")
-                            end)
-                            itm:SetScript("OnLeave", function()
-                                EllesmereUI.HideWidgetTooltip()
-                            end)
-                        else
-                            local iLbl, iHl, iXBtn, iEditBtn, iKbBtn = itm._lbl, itm._hl, itm._xBtn, itm._editBtn, itm._kbBtn
-                            iLbl:SetTextColor(1, 1, 1, EllesmereUI.TEXT_DIM_A)
-                            if capName == "Default" then
-                                iXBtn:Hide()
-                                iEditBtn:Hide()
-                                iKbBtn:Hide()
-                            else
-                                iXBtn:Show()
-                                iEditBtn:Show()
-                                iKbBtn:Show()
-                            end
-                            local function IsOverInline()
-                                return iXBtn:IsMouseOver() or iEditBtn:IsMouseOver() or iKbBtn:IsMouseOver()
-                            end
-                            local function SetAllAlpha(a)
-                                iXBtn:SetAlpha(a); iEditBtn:SetAlpha(a); iKbBtn:SetAlpha(a)
-                            end
-                            itm:SetScript("OnEnter", function()
-                                iLbl:SetTextColor(1, 1, 1, 1)
-                                iHl:SetAlpha(EllesmereUI.DD_ITEM_HL_A)
-                                SetAllAlpha(0.8)
-                            end)
-                            itm:SetScript("OnLeave", function()
-                                if IsOverInline() then return end
-                                iLbl:SetTextColor(1, 1, 1, EllesmereUI.TEXT_DIM_A)
-                                iHl:SetAlpha(itm._isSel and EllesmereUI.DD_ITEM_SEL_A or 0)
-                                SetAllAlpha(0.4)
-                            end)
-                            itm:SetScript("OnClick", function()
-                                menu:Hide()
-                                -- Force-save current profile before switching
-                                -- (same direct snapshot the spec-switch uses,
-                                -- bypasses _profileSaveLocked guard)
-                                local wasLocked = EllesmereUI._profileSaveLocked
-                                EllesmereUI._profileSaveLocked = false
-                                EllesmereUI.AutoSaveActiveProfile()
-                                EllesmereUI._profileSaveLocked = wasLocked
-                                local _, profiles = EllesmereUI.GetProfileList()
-                                local fontWillChange = EllesmereUI.ProfileChangesFont(profiles and profiles[capName])
-                                EllesmereUI.SwitchProfile(capName)
-                                ddLabel:SetText(EllesmereUI.GetActiveProfileName())
-                                EllesmereUI.RefreshAllAddons()
-                                if fontWillChange then
-                                    EllesmereUI:ShowConfirmPopup({
-                                        title       = "Reload Required",
-                                        message     = "Font changed. A UI reload is needed to apply the new font.",
-                                        confirmText = "Reload Now",
-                                        cancelText  = "Later",
-                                        onConfirm   = function() ReloadUI() end,
-                                    })
-                                else
-                                    EllesmereUI:RefreshPage()
-                                end
-                            end)
-                            iXBtn:SetScript("OnClick", function()
-                                if capName == "Default" then return end
-                                menu:Hide()
-                                EllesmereUI:ShowConfirmPopup({
-                                    title       = "Delete Profile",
-                                    message     = "Delete \"" .. capName .. "\"?",
-                                    confirmText = "Delete",
-                                    cancelText  = "Cancel",
-                                    onConfirm   = function()
-                                        EllesmereUI.DeleteProfile(capName)
-                                        ddLabel:SetText(EllesmereUI.GetActiveProfileName())
-                                        EllesmereUI:InvalidatePageCache()
-                                        EllesmereUI:RefreshPage(true)
-                                    end,
-                                })
-                            end)
-                            iEditBtn:SetScript("OnClick", function()
-                                if capName == "Default" then return end
-                                menu:Hide()
-                                EllesmereUI:ShowInputPopup({
-                                    title       = "Rename Profile",
-                                    message     = "Enter a new name for \"" .. capName .. "\":",
-                                    placeholder = capName,
-                                    confirmText = "Rename",
-                                    cancelText  = "Cancel",
-                                    onConfirm   = function(newName)
-                                        if not newName or newName == "" or newName == capName then return end
-                                        EllesmereUI.RenameProfile(capName, newName)
-                                        ddLabel:SetText(EllesmereUI.GetActiveProfileName())
-                                        EllesmereUI:InvalidatePageCache()
-                                        EllesmereUI:RefreshPage(true)
-                                    end,
-                                })
-                            end)
-                            iKbBtn:SetScript("OnClick", function()
-                                menu:Hide()
-                                ShowProfileKeybindPopup(capName)
-                            end)
-                        end
+if capName == "Default" then
+    iXBtn:Hide()
+    iKbBtn:Hide()
+else
+    iXBtn:Show()
+    iKbBtn:Show()
+end
+
+local function IsOverInline()
+    return iXBtn:IsMouseOver() or iKbBtn:IsMouseOver()
+end
+
+local function SetAllAlpha(a)
+    iXBtn:SetAlpha(a)
+    iKbBtn:SetAlpha(a)
+end
+
+itm:SetScript("OnEnter", function()
+    iLbl:SetTextColor(1, 1, 1, 1)
+    iHl:SetAlpha(EllesmereUI.DD_ITEM_HL_A)
+    SetAllAlpha(0.8)
+end)
+
+itm:SetScript("OnLeave", function()
+    if IsOverInline() then return end
+    iLbl:SetTextColor(1, 1, 1, EllesmereUI.TEXT_DIM_A)
+    iHl:SetAlpha(itm._isSel and EllesmereUI.DD_ITEM_SEL_A or 0)
+    SetAllAlpha(0.4)
+end)
+
+itm:SetScript("OnClick", function()
+    if capName == activeName then return end
+    menu:Hide()
+    local _, profiles = EllesmereUI.GetProfileList()
+    local fontWillChange = EllesmereUI.ProfileChangesFont(profiles and profiles[capName])
+    EllesmereUI.SwitchProfile(capName)
+    ddLabel:SetText(EllesmereUI.GetActiveProfileName())
+    EllesmereUI.RefreshAllAddons()
+    if fontWillChange then
+        EllesmereUI:ShowConfirmPopup({
+            title       = "Reload Required",
+            message     = "Font changed. A UI reload is needed to apply the new font.",
+            confirmText = "Reload Now",
+            cancelText  = "Later",
+            onConfirm   = function() ReloadUI() end,
+        })
+    else
+        EllesmereUI:RefreshPage()
+    end
+end)
+
+iXBtn:SetScript("OnClick", function()
+    if capName == "Default" then return end
+    menu:Hide()
+    EllesmereUI:ShowConfirmPopup({
+        title       = "Delete Profile",
+        message     = "Delete \"" .. capName .. "\"?",
+        confirmText = "Delete",
+        cancelText  = "Cancel",
+        onConfirm   = function()
+            local wasActive = (capName == EllesmereUI.GetActiveProfileName())
+            EllesmereUI.DeleteProfile(capName)
+            if wasActive then
+                EllesmereUI.SwitchProfile("Default")
+                EllesmereUI.RefreshAllAddons()
+            end
+            ddLabel:SetText(EllesmereUI.GetActiveProfileName())
+            EllesmereUI:InvalidatePageCache()
+            EllesmereUI:RefreshPage(true)
+        end,
+    })
+end)
+
+iKbBtn:SetScript("OnClick", function()
+    menu:Hide()
+    ShowProfileKeybindPopup(capName)
+end)
 
                         itm:Show()
                         mH = mH + 26
@@ -4518,12 +3876,49 @@ initFrame:SetScript("OnEvent", function(self)
                         return list
                     end,
                     onDone = function()
+                        local oldDefaults = db.specProfiles or {}
+
                         db.specProfiles = {}
+                        db.specAltProfiles = {}
+
+                        -- Build reverse map: specID -> { [profileName] = true, ... }
+                        local selectedBySpec = {}
                         for pName, specSet in pairs(tempDB._profileSpecs) do
                             for specID in pairs(specSet) do
-                                db.specProfiles[specID] = pName
+                                if not selectedBySpec[specID] then
+                                    selectedBySpec[specID] = {}
+                                end
+                                selectedBySpec[specID][pName] = true
                             end
                         end
+
+                        -- Preserve existing default when possible; otherwise use first profile in order.
+                        for specID, profileSet in pairs(selectedBySpec) do
+                            local defaultProfile = oldDefaults[specID]
+
+                            if not (defaultProfile and profileSet[defaultProfile]) then
+                                defaultProfile = nil
+                                for _, pName in ipairs(order) do
+                                    if profileSet[pName] then
+                                        defaultProfile = pName
+                                        break
+                                    end
+                                end
+                            end
+
+                            if defaultProfile then
+                                db.specProfiles[specID] = defaultProfile
+                                for pName in pairs(profileSet) do
+                                    if pName ~= defaultProfile then
+                                        if not db.specAltProfiles[specID] then
+                                            db.specAltProfiles[specID] = {}
+                                        end
+                                        db.specAltProfiles[specID][pName] = true
+                                    end
+                                end
+                            end
+                        end
+
                         EllesmereUI:RefreshPage()
                     end,
                 })
@@ -4544,32 +3939,11 @@ initFrame:SetScript("OnEvent", function(self)
                     onConfirm   = function(name)
                         if not name or name == "" then return end
                         EllesmereUI.SaveCurrentAsProfile(name)
+                        EllesmereUI.RefreshAllAddons()
                         ddLabel:SetText(name)
                         EllesmereUI:RefreshPage()
                     end,
                 })
-            end)
-
-            -- Create New button (creates a profile from default settings)
-            local createNewBtn = CreateFrame("Button", nil, rowFrame)
-            PP.Size(createNewBtn, BTN_W, ITEM_H)
-            PP.Point(createNewBtn, "LEFT", saveAsBtn, "RIGHT", GAP, 0)
-            createNewBtn:SetFrameLevel(rowFrame:GetFrameLevel() + 2)
-            EllesmereUI.MakeStyledButton(createNewBtn, "Create New", 11, PROF_BTN_COLOURS, function()
-                local _, profiles = EllesmereUI.GetProfileList()
-                local n = 2
-                while profiles["Default " .. n] do n = n + 1 end
-                local newName = "Default " .. n
-                EllesmereUI.CreateDefaultProfile(newName)
-                EllesmereUI.SwitchProfile(newName)
-                EllesmereUI.RefreshAllAddons()
-                ddLabel:SetText(newName)
-                EllesmereUI:RefreshPage()
-                -- Flash the (rebuilt) dropdown after the page refresh
-                C_Timer.After(0, function()
-                    local btn = EllesmereUI._profileDDBtn
-                    if btn then EllesmereUI.PlaySyncFlash(btn) end
-                end)
             end)
 
             y = y - ROW_H
@@ -4821,229 +4195,6 @@ initFrame:SetScript("OnEvent", function(self)
             y = y - ROW_H_E
         end
 
-        -------------------------------------------------------------------
-        --  CDM SPELL PROFILE section
-        -------------------------------------------------------------------
-        if C_AddOns.IsAddOnLoaded("EllesmereUICooldownManager") then
-            local cdmHeader
-            cdmHeader, h = W:SectionHeader(parent, "CDM SPELL PROFILE", y);  y = y - h
-
-            -- Per-spec checkbox grid
-            local selectedSpecs = {}
-            local cdmGridVisuals = {}
-            do
-                local specProfiles = EllesmereUI.GetCDMSpecProfiles()
-                local GRID_COLS  = 4
-                local GRID_ROW_H = 50
-                local GRID_BOX_SZ = 18
-                local GRID_PAD   = EllesmereUI.CONTENT_PAD or 16
-                local GRID_SIDE  = 20
-                local ICON_SZ    = 22
-
-                local gridItems = {}
-                for _, sp in ipairs(specProfiles) do
-                    local key = sp.key
-                    gridItems[#gridItems + 1] = {
-                        label   = sp.name,
-                        icon    = sp.icon,
-                        enabled = true,
-                        getVal  = function() return selectedSpecs[key] or false end,
-                        setVal  = function(v) selectedSpecs[key] = v or nil end,
-                    }
-                end
-
-                local function RefreshCDMGrid()
-                    for _, fn in ipairs(cdmGridVisuals) do fn() end
-                end
-                BuildCheckLinks(cdmHeader, gridItems, RefreshCDMGrid)
-
-                local totalW = parent:GetWidth() - GRID_PAD * 2
-                local colW   = math.floor(totalW / GRID_COLS)
-                local totalRows = math.ceil(#gridItems / GRID_COLS)
-
-                if #gridItems == 0 then
-                    -- No saved spec profiles: show a hint
-                    local hintRow = CreateFrame("Frame", nil, parent)
-                    PP.Size(hintRow, totalW, 40)
-                    PP.Point(hintRow, "TOPLEFT", parent, "TOPLEFT", GRID_PAD, y)
-                    hintRow._skipRowDivider = true
-                    EllesmereUI.RowBg(hintRow, parent)
-                    local hintLbl = EllesmereUI.MakeFont(hintRow, 13, nil, 1, 1, 1)
-                    hintLbl:SetPoint("CENTER")
-                    hintLbl:SetAlpha(0.4)
-                    hintLbl:SetText("No saved spec profiles found. Play each spec once to generate them.")
-                    y = y - 40
-                end
-
-                for row = 0, totalRows - 1 do
-                    local rowFrame = CreateFrame("Frame", nil, parent)
-                    PP.Size(rowFrame, totalW, GRID_ROW_H)
-                    PP.Point(rowFrame, "TOPLEFT", parent, "TOPLEFT", GRID_PAD, y - row * GRID_ROW_H)
-                    rowFrame._skipRowDivider = true
-                    EllesmereUI.RowBg(rowFrame, parent)
-
-                    for d = 1, GRID_COLS - 1 do
-                        local div = rowFrame:CreateTexture(nil, "ARTWORK")
-                        div:SetColorTexture(1, 1, 1, 0.06)
-                        if div.SetSnapToPixelGrid then div:SetSnapToPixelGrid(false); div:SetTexelSnappingBias(0) end
-                        div:SetWidth(1)
-                        PP.Point(div, "TOP",    rowFrame, "TOPLEFT", d * colW, 0)
-                        PP.Point(div, "BOTTOM", rowFrame, "BOTTOMLEFT", d * colW, 0)
-                    end
-
-                    for col = 0, GRID_COLS - 1 do
-                        local idx = row * GRID_COLS + col + 1
-                        local item = gridItems[idx]
-                        if not item then break end
-
-                        local cell = CreateFrame("Frame", nil, rowFrame)
-                        cell:SetSize(colW, GRID_ROW_H)
-                        cell:SetPoint("TOPLEFT", rowFrame, "TOPLEFT", col * colW, 0)
-
-                        -- Spec icon
-                        if item.icon then
-                            local ico = cell:CreateTexture(nil, "ARTWORK")
-                            ico:SetSize(ICON_SZ, ICON_SZ)
-                            ico:SetPoint("LEFT", cell, "LEFT", GRID_SIDE, 0)
-                            ico:SetTexture(item.icon)
-                            ico:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-
-                            local label = EllesmereUI.MakeFont(cell, 13, nil, 1, 1, 1)
-                            label:SetPoint("LEFT", ico, "RIGHT", 6, 0)
-                            label:SetText(item.label)
-                            item._label = label
-                            item._icon  = ico
-                        else
-                            local label = EllesmereUI.MakeFont(cell, 13, nil, 1, 1, 1)
-                            label:SetPoint("LEFT", cell, "LEFT", GRID_SIDE, 0)
-                            label:SetText(item.label)
-                            item._label = label
-                        end
-
-                        local box = CreateFrame("Frame", nil, cell)
-                        box:SetSize(GRID_BOX_SZ, GRID_BOX_SZ)
-                        box:SetPoint("RIGHT", cell, "RIGHT", -GRID_SIDE, 0)
-
-                        local boxBg = box:CreateTexture(nil, "BACKGROUND")
-                        boxBg:SetAllPoints()
-                        boxBg:SetColorTexture(0.12, 0.12, 0.14, 1)
-                        if boxBg.SetSnapToPixelGrid then boxBg:SetSnapToPixelGrid(false); boxBg:SetTexelSnappingBias(0) end
-
-                        local boxBrd = EllesmereUI.MakeBorder(box, 0.25, 0.25, 0.28, 0.6, EllesmereUI.PanelPP)
-
-                        local check = box:CreateTexture(nil, "ARTWORK")
-                        check:SetPoint("TOPLEFT", box, "TOPLEFT", 3, -3)
-                        check:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", -3, 3)
-                        check:SetColorTexture(EG.r, EG.g, EG.b, 1)
-                        if check.SetSnapToPixelGrid then check:SetSnapToPixelGrid(false); check:SetTexelSnappingBias(0) end
-
-                        local btn = CreateFrame("Button", nil, cell)
-                        btn:SetAllPoints(cell)
-                        btn:SetFrameLevel(cell:GetFrameLevel() + 2)
-
-                        local function ApplyVisual()
-                            local on = item.getVal()
-                            if on then
-                                check:Show()
-                                item._label:SetAlpha(1)
-                                if item._icon then item._icon:SetAlpha(1) end
-                                boxBrd:SetColor(EG.r, EG.g, EG.b, 0.15)
-                            else
-                                check:Hide()
-                                item._label:SetAlpha(0.5)
-                                if item._icon then item._icon:SetAlpha(0.5) end
-                                boxBrd:SetColor(0.25, 0.25, 0.28, 0.6)
-                            end
-                        end
-                        ApplyVisual()
-                        cdmGridVisuals[#cdmGridVisuals + 1] = ApplyVisual
-
-                        btn:SetScript("OnClick", function()
-                            item.setVal(not item.getVal())
-                            ApplyVisual()
-                        end)
-                        btn:SetScript("OnEnter", function()
-                            if not item.getVal() then
-                                item._label:SetAlpha(0.8)
-                                if item._icon then item._icon:SetAlpha(0.8) end
-                            end
-                        end)
-                        btn:SetScript("OnLeave", function()
-                            if not item.getVal() then
-                                item._label:SetAlpha(0.5)
-                                if item._icon then item._icon:SetAlpha(0.5) end
-                            end
-                        end)
-                    end
-                end
-
-                if totalRows > 0 then y = y - totalRows * GRID_ROW_H end
-            end
-
-            -- Spacing before buttons
-            _, h = W:Spacer(parent, y, 10);  y = y - h
-
-            -- Export / Import CDM Spell Profile buttons (side-by-side)
-            do
-                local ROW_H  = 70
-                local ITEM_H = 36
-                local GAP    = 35
-                local ITEM_W = 220
-
-                local totalW = parent:GetWidth() - EllesmereUI.CONTENT_PAD * 2
-                local rowFrame = CreateFrame("Frame", nil, parent)
-                PP.Size(rowFrame, totalW, ROW_H)
-                PP.Point(rowFrame, "TOPLEFT", parent, "TOPLEFT", EllesmereUI.CONTENT_PAD, y)
-
-                local groupW = ITEM_W * 2 + GAP
-                local startX = math.floor((totalW - groupW) / 2)
-
-                -- Export CDM Spell Profile
-                local exportCDMBtn = CreateFrame("Button", nil, rowFrame)
-                PP.Size(exportCDMBtn, ITEM_W, ITEM_H)
-                PP.Point(exportCDMBtn, "TOPLEFT", rowFrame, "TOPLEFT", startX, -math.floor((ROW_H - ITEM_H) / 2))
-                exportCDMBtn:SetFrameLevel(rowFrame:GetFrameLevel() + 2)
-                EllesmereUI.MakeStyledButton(exportCDMBtn, "Export CDM Spell Profile", 13, EllesmereUI.WB_COLOURS, function()
-                    local keys = {}
-                    for k in pairs(selectedSpecs) do keys[#keys + 1] = k end
-                    if #keys == 0 then
-                        EllesmereUI:ShowInfoPopup({ title = "No Specs Selected", content = "Select at least one spec to export." })
-                        return
-                    end
-                    local str = EllesmereUI.ExportCDMSpellLayouts(keys)
-                    if str then
-                        EllesmereUI:ShowExportPopup(str)
-                    else
-                        EllesmereUI:ShowInfoPopup({ title = "Export Failed", content = "No spell data found for the selected specs." })
-                    end
-                end)
-
-                -- Import CDM Spell Profile
-                local importCDMBtn = CreateFrame("Button", nil, rowFrame)
-                PP.Size(importCDMBtn, ITEM_W, ITEM_H)
-                PP.Point(importCDMBtn, "TOPLEFT", exportCDMBtn, "TOPRIGHT", GAP, 0)
-                importCDMBtn:SetFrameLevel(rowFrame:GetFrameLevel() + 2)
-                EllesmereUI.MakeStyledButton(importCDMBtn, "Import CDM Spell Profile", 13, EllesmereUI.WB_COLOURS, function()
-                    EllesmereUI:ShowImportPopup(function(importStr)
-                        local ok, err, count = EllesmereUI.ImportCDMSpellLayouts(importStr)
-                        if ok then
-                            EllesmereUI:ShowConfirmPopup({
-                                title       = "Import Successful",
-                                message     = (count or 0) .. " spec profile(s) imported. Reload to apply changes.",
-                                confirmText = "Reload Now",
-                                cancelText  = "Cancel",
-                                onConfirm   = function() ReloadUI() end,
-                            })
-                        else
-                            EllesmereUI:ShowInfoPopup({ title = "Import Failed", content = err or "Unknown error" })
-                        end
-                    end)
-                end)
-
-                y = y - ROW_H
-            end
-        end
-
         return math.abs(y)
     end
 
@@ -5101,28 +4252,16 @@ initFrame:SetScript("OnEvent", function(self)
                 -- Reset UI scale so next reload re-snapshots from Blizzard default
                 EllesmereUIDB.ppUIScale = nil
                 EllesmereUIDB.ppUIScaleAuto = nil
-                EllesmereUIDB.blizzUIScale = nil
                 -- Developer settings defaults
                 EllesmereUIDB.errorGrabber = false
                 EllesmereUIDB.errorSound = false
                 EllesmereUIDB.showSpellID = false
                 EllesmereUIDB.suppressErrors = true
                 EllesmereUIDB.crosshairSize = "None"
-                -- Distance & Melee indicator defaults
-                EllesmereUIDB.showDistanceText = false
-                EllesmereUIDB.distanceFontSize = nil
-                EllesmereUIDB.distanceFixedColor = false
-                EllesmereUIDB.distanceTextColor = nil
-                EllesmereUIDB.distanceTextPos = nil
-                EllesmereUIDB.showMeleeIndicator = false
-                EllesmereUIDB.meleeTexture = nil
-                EllesmereUIDB.meleeIndicatorPos = nil
-            end
-            if EllesmereUI._applyDistanceText then
-                EllesmereUI._applyDistanceText()
-            end
-            if EllesmereUI._applyMeleeIndicator then
-                EllesmereUI._applyMeleeIndicator()
+                -- Reset unlock mode layout data
+                EllesmereUIDB.unlockAnchors = nil
+                EllesmereUIDB.unlockWidthMatch = nil
+                EllesmereUIDB.unlockHeightMatch = nil
             end
             if EllesmereUI._applyRightClickTarget then
                 EllesmereUI._applyRightClickTarget()
@@ -5148,66 +4287,3 @@ initFrame:SetScript("OnEvent", function(self)
         end,
     })
 end)
-
--------------------------------------------------------------------------------
---  /scanrange -- temporary item range scanner (remove when done)
---
---  Usage: target a unit, stand at a known distance, type /scanrange
---  Items showing IN have a range >= your current distance.
---  Items showing OUT have a range < your current distance.
---  Compare results at different distances to determine each item's range.
---
---  Optional: /scanrange 50000 100000  (scan a specific ID range)
--------------------------------------------------------------------------------
-SLASH_EUISCANRANGE1 = "/scanrange"
-SlashCmdList["EUISCANRANGE"] = function(msg)
-    if not UnitExists("target") then
-        print("|cff0CD29DEllesmereUI:|r Need a target for range scanning.")
-        return
-    end
-
-    local args = {}
-    for w in msg:gmatch("%S+") do args[#args + 1] = tonumber(w) end
-    local startID = args[1] or 1
-    local endID   = args[2] or 200000
-    local PER_FRAME = 100
-
-    local isEnemy = UnitCanAttack("player", "target")
-    local mode = isEnemy and "HOSTILE" or "FRIENDLY"
-    print("|cff0CD29DEllesmereUI:|r Scanning items " .. startID .. "-" .. endID .. " (" .. mode .. ")...")
-
-    local found = {}
-    local i = startID
-    local total = endID - startID + 1
-    local nextReport = startID + math.floor(total * 0.1)
-    local reportStep = math.floor(total * 0.1)
-    local f = CreateFrame("Frame")
-    f:SetScript("OnUpdate", function()
-        local count = 0
-        while i <= endID and count < PER_FRAME do
-            local ok, hasRange = pcall(C_Item.ItemHasRange, i)
-            if ok and hasRange then
-                local ok2, inRange = pcall(C_Item.IsItemInRange, i, "target")
-                if ok2 and inRange ~= nil then
-                    found[#found + 1] = { id = i, inRange = inRange }
-                end
-            end
-            i = i + 1
-            count = count + 1
-        end
-        if i >= nextReport and i <= endID then
-            local pct = math.floor((i - startID) / total * 100)
-            print("|cff0CD29DEllesmereUI:|r " .. pct .. "% -- scanned to " .. i .. " (" .. #found .. " found so far)")
-            nextReport = nextReport + reportStep
-        end
-        if i > endID then
-            f:SetScript("OnUpdate", nil)
-            print("|cff0CD29DEllesmereUI:|r Scan complete -- " .. #found .. " items with range data")
-            for _, item in ipairs(found) do
-                local tag = item.inRange and "|cff00ff00IN |r" or "|cffff0000OUT|r"
-                local name = C_Item.GetItemNameByID(item.id) or "?"
-                print("  " .. tag .. " " .. item.id .. " -- " .. name)
-            end
-        end
-    end)
-end
