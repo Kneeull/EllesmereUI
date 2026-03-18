@@ -386,15 +386,19 @@ do
            -- fall back to the last known non-spec profile.
             local curActive = EllesmereUIDB.activeProfile
             local safe = curActive
+<<<<<<< Updated upstream
             if curActive and (IsProfileAssignedToAnySpec(curActive) or IsProfileAltForAnySpec(curActive)) then
+=======
+                      if curActive and (IsProfileAssignedToAnySpec(curActive) or IsProfileAltForAnySpec(curActive)) then
+>>>>>>> Stashed changes
                 safe = EllesmereUIDB.lastNonSpecProfile
                 if not safe or not (EllesmereUIDB.profiles or {})[safe] then
                     safe = "Default"
                 end
                 EllesmereUIDB.activeProfile = safe
             end
-            return
-        end
+        return
+     end
 
         local targetProfile = specProfiles[resolvedSpecID]
         if not targetProfile then return end
@@ -1289,9 +1293,15 @@ function EllesmereUI.DeleteProfile(name)
     for i, n in ipairs(db.profileOrder) do
         if n == name then table.remove(db.profileOrder, i); break end
     end
+<<<<<<< Updated upstream
 
     -- Clean up default spec assignments
     for specID, pName in pairs(db.specProfiles) do
+=======
+    -- Clean up default spec assignments
+ for specID, pName in pairs(db.specProfiles) do
+        if pName == name then db.specProfiles[specID] = nil end
+>>>>>>> Stashed changes
         if pName == name then
             db.specProfiles[specID] = nil
         end
@@ -1311,7 +1321,11 @@ function EllesmereUI.DeleteProfile(name)
 
     -- Clean up keybind
     EllesmereUI.OnProfileDeleted(name)
+<<<<<<< Updated upstream
 
+=======
+    
+>>>>>>> Stashed changes
     -- If deleted profile was active, fall back to Default
     if db.activeProfile == name then
         db.activeProfile = "Default"
@@ -1333,6 +1347,10 @@ function EllesmereUI.RenameProfile(oldName, newName)
     end
 
     for specID, pName in pairs(db.specProfiles) do
+<<<<<<< Updated upstream
+=======
+        if pName == oldName then db.specProfiles[specID] = newName end
+>>>>>>> Stashed changes
         if pName == oldName then
             db.specProfiles[specID] = newName
         end
@@ -1398,7 +1416,10 @@ end
 function EllesmereUI.AssignProfileToSpec(profileName, specID)
     local db = GetProfilesDB()
     db.specProfiles[specID] = profileName
+<<<<<<< Updated upstream
 
+=======
+>>>>>>> Stashed changes
     -- If this profile was an alt for the spec, remove it from alts
     if db.specAltProfiles and db.specAltProfiles[specID] then
         db.specAltProfiles[specID][profileName] = nil
@@ -1406,7 +1427,10 @@ function EllesmereUI.AssignProfileToSpec(profileName, specID)
             db.specAltProfiles[specID] = nil
         end
     end
+<<<<<<< Updated upstream
 end
+=======
+>>>>>>> Stashed changes
 
 function EllesmereUI.UnassignSpec(specID)
     local db = GetProfilesDB()
@@ -1464,6 +1488,10 @@ function EllesmereUI.ProfileBelongsToSpec(profileName, specID)
     local altSet = db.specAltProfiles and db.specAltProfiles[specID]
     return altSet and altSet[profileName] or false
 end
+<<<<<<< Updated upstream
+=======
+
+>>>>>>> Stashed changes
 -------------------------------------------------------------------------------
 --  AutoSaveActiveProfile: no-op in single-storage mode.
 --  Addons write directly to EllesmereUIDB.profiles[active].addons[folder],
@@ -1675,7 +1703,10 @@ do
             local currentIsSpecAssigned =
                 IsProfileAssignedToAnySpec(current) or IsProfileAltForAnySpec(current)
 
+<<<<<<< Updated upstream
             if currentIsSpecAssigned then
+=======
+>>>>>>> Stashed changes
                 -- Find the best fallback: lastNonSpecProfile, or any profile
                 -- that isn't spec-assigned, or Default as last resort.
                 local fallback = db.lastNonSpecProfile
@@ -1687,6 +1718,7 @@ do
                             specAssignedSet[pName] = true
                         end
                     end
+<<<<<<< Updated upstream
                     if db.specAltProfiles then
                         for _, altSet in pairs(db.specAltProfiles) do
                             if altSet then
@@ -1696,6 +1728,18 @@ do
                             end
                         end
                     end
+=======
+                    
+                    if db.specAltProfiles then
+                        for _, altSet in pairs(db.specAltProfiles) do
+                        if altSet then
+                            for pName in pairs(altSet) do
+                            specAssignedSet[pName] = true
+                            end
+                        end
+                    end
+                end    
+>>>>>>> Stashed changes
                     for _, pName in ipairs(db.profileOrder or {}) do
                         if not specAssignedSet[pName] and db.profiles[pName] then
                             fallback = pName

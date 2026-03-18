@@ -2975,36 +2975,6 @@ initFrame:SetScript("OnEvent", function(self)
         local EG = EllesmereUI.ELLESMERE_GREEN
         local MEDIA = "Interface\\AddOns\\EllesmereUI\\media\\"
 
-        -- Safety net: verify the active profile matches the current spec
-        -- assignment. If the user opens settings while on the wrong profile
-        -- (e.g. spec info was unavailable at login), correct it now.
-        do
-            local si = GetSpecialization and GetSpecialization() or 0
-            local sid = si and si > 0 and GetSpecializationInfo(si) or nil
-            if sid then
-                local assigned = EllesmereUI.GetSpecProfile(sid)
-                if assigned then
-                    local current = EllesmereUI.GetActiveProfileName()
-                    if assigned ~= current then
-                        local _, profiles = EllesmereUI.GetProfileList()
-                        if profiles and profiles[assigned] then
-                            local fontWillChange = EllesmereUI.ProfileChangesFont(profiles[assigned])
-                            EllesmereUI.SwitchProfile(assigned)
-                            EllesmereUI.RefreshAllAddons()
-                            if fontWillChange then
-                                EllesmereUI:ShowConfirmPopup({
-                                    title       = "Reload Required",
-                                    message     = "Font changed. A UI reload is needed to apply the new font.",
-                                    confirmText = "Reload Now",
-                                    cancelText  = "Later",
-                                    onConfirm   = function() ReloadUI() end,
-                                })
-                            end
-                        end
-                    end
-                end
-            end
-        end
 
         parent._showRowDivider = false
 
@@ -3884,20 +3854,6 @@ initFrame:SetScript("OnEvent", function(self)
                         local capName = name
                         local specLocked = specAssigned and specAssigned ~= capName
 
-                        if specLocked then
-                            -- Disable: dim label, hide X, edit, and keybind, block clicks, show tooltip
-                            itm._lbl:SetTextColor(1, 1, 1, 0.25)
-                            itm._xBtn:Hide()
-                            itm._editBtn:Hide()
-                            itm._kbBtn:Hide()
-                            itm:SetScript("OnClick", nil)
-                            itm:SetScript("OnEnter", function()
-                                EllesmereUI.ShowWidgetTooltip(itm, "Your current spec has an assigned profile so you cannot switch to another. Please unassign to switch.")
-                            end)
-                            itm:SetScript("OnLeave", function()
-                                EllesmereUI.HideWidgetTooltip()
-                            end)
-                        else
                             local iLbl, iHl, iXBtn, iEditBtn, iKbBtn = itm._lbl, itm._hl, itm._xBtn, itm._editBtn, itm._kbBtn
                             iLbl:SetTextColor(1, 1, 1, EllesmereUI.TEXT_DIM_A)
                             iEditBtn:Hide()  -- rename disabled; name is set at creation
@@ -4036,13 +3992,50 @@ initFrame:SetScript("OnEvent", function(self)
                         end
                         return list
                     end,
-                    onDone = function()
+onDone = function()
+                        local oldDefaults = db.specProfiles or {}
+
                         db.specProfiles = {}
+                        db.specAltProfiles = {}
+
+                        -- Build reverse map: specID -> { [profileName] = true, ... }
+                        local selectedBySpec = {}
                         for pName, specSet in pairs(tempDB._profileSpecs) do
                             for specID in pairs(specSet) do
-                                db.specProfiles[specID] = pName
+                                if not selectedBySpec[specID] then
+                                    selectedBySpec[specID] = {}
+                                end
+                                selectedBySpec[specID][pName] = true
                             end
                         end
+
+                        -- Preserve existing default when possible; otherwise use first profile in order.
+                        for specID, profileSet in pairs(selectedBySpec) do
+                            local defaultProfile = oldDefaults[specID]
+
+                            if not (defaultProfile and profileSet[defaultProfile]) then
+                                defaultProfile = nil
+                                for _, pName in ipairs(order) do
+                                    if profileSet[pName] then
+                                        defaultProfile = pName
+                                        break
+                                    end
+                                end
+                            end
+
+                            if defaultProfile then
+                                db.specProfiles[specID] = defaultProfile
+                                for pName in pairs(profileSet) do
+                                    if pName ~= defaultProfile then
+                                        if not db.specAltProfiles[specID] then
+                                            db.specAltProfiles[specID] = {}
+                                        end
+                                        db.specAltProfiles[specID][pName] = true
+                                    end
+                                end
+                            end
+                        end
+
                         EllesmereUI:RefreshPage()
                     end,
                 })
