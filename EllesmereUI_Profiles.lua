@@ -386,11 +386,8 @@ do
            -- fall back to the last known non-spec profile.
             local curActive = EllesmereUIDB.activeProfile
             local safe = curActive
-<<<<<<< Updated upstream
-            if curActive and (IsProfileAssignedToAnySpec(curActive) or IsProfileAltForAnySpec(curActive)) then
-=======
-                      if curActive and (IsProfileAssignedToAnySpec(curActive) or IsProfileAltForAnySpec(curActive)) then
->>>>>>> Stashed changes
+                       if curActive and (IsProfileAssignedToAnySpec(curActive) or IsProfileAltForAnySpec(curActive)) then
+
                 safe = EllesmereUIDB.lastNonSpecProfile
                 if not safe or not (EllesmereUIDB.profiles or {})[safe] then
                     safe = "Default"
@@ -1695,18 +1692,6 @@ do
                 end
             end
             if currentIsSpecAssigned then
-            -- No spec assignment for this character. If the current
-            -- activeProfile is spec-assigned (left over from a previous
-            -- character), switch to the last non-spec profile so this
-            -- character doesn't inherit another spec's layout.
-            local current = db.activeProfile or "Default"
-            local currentIsSpecAssigned =
-                IsProfileAssignedToAnySpec(current) or IsProfileAltForAnySpec(current)
-
-<<<<<<< Updated upstream
-            if currentIsSpecAssigned then
-=======
->>>>>>> Stashed changes
                 -- Find the best fallback: lastNonSpecProfile, or any profile
                 -- that isn't spec-assigned, or Default as last resort.
                 local fallback = db.lastNonSpecProfile
@@ -1718,28 +1703,6 @@ do
                             specAssignedSet[pName] = true
                         end
                     end
-<<<<<<< Updated upstream
-                    if db.specAltProfiles then
-                        for _, altSet in pairs(db.specAltProfiles) do
-                            if altSet then
-                                for pName in pairs(altSet) do
-                                    specAssignedSet[pName] = true
-                                end
-                            end
-                        end
-                    end
-=======
-                    
-                    if db.specAltProfiles then
-                        for _, altSet in pairs(db.specAltProfiles) do
-                        if altSet then
-                            for pName in pairs(altSet) do
-                            specAssignedSet[pName] = true
-                            end
-                        end
-                    end
-                end    
->>>>>>> Stashed changes
                     for _, pName in ipairs(db.profileOrder or {}) do
                         if not specAssignedSet[pName] and db.profiles[pName] then
                             fallback = pName
@@ -1759,7 +1722,6 @@ do
         end
     end)
 end
-
 
 -------------------------------------------------------------------------------
 --  Popular Presets & Weekly Spotlight
