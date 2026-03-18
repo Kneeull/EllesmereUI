@@ -209,6 +209,7 @@ local function GetProfilesDB()
     if not EllesmereUIDB.profiles then EllesmereUIDB.profiles = {} end
     if not EllesmereUIDB.profileOrder then EllesmereUIDB.profileOrder = {} end
     if not EllesmereUIDB.specProfiles then EllesmereUIDB.specProfiles = {} end
+    if not EllesmereUIDB.specAltProfiles then EllesmereUIDB.specAltProfiles = {} end
     return EllesmereUIDB
 end
 EllesmereUI.GetProfilesDB = GetProfilesDB
@@ -357,21 +358,16 @@ do
             if next(specProfiles) then
                 EllesmereUI._profileSaveLocked = true
             end
-            -- If activeProfile belongs to a spec assignment from another
-            -- character, fall back to a safe default.
+           -- If activeProfile belongs to a spec assignment from another character/spec,
+           -- fall back to the last known non-spec profile.
             local curActive = EllesmereUIDB.activeProfile
             local safe = curActive
-            if curActive and next(specProfiles) then
-                for _, pName in pairs(specProfiles) do
-                    if pName == curActive then
-                        safe = EllesmereUIDB.lastNonSpecProfile
-                        if not safe or not (EllesmereUIDB.profiles or {})[safe] then
-                            safe = "Default"
-                        end
-                        EllesmereUIDB.activeProfile = safe
-                        break
-                    end
+            if curActive and (IsProfileAssignedToAnySpec(curActive) or IsProfileAltForAnySpec(curActive)) then
+                safe = EllesmereUIDB.lastNonSpecProfile
+                if not safe or not (EllesmereUIDB.profiles or {})[safe] then
+                    safe = "Default"
                 end
+                EllesmereUIDB.activeProfile = safe
             end
             return
         end
@@ -382,6 +378,7 @@ do
         EllesmereUIDB.activeProfile = targetProfile
     end)
 end
+
 
 --- Called by EllesmereUI_Lite just before child addon OnEnable calls fire.
 --- Resolves the current spec and re-points all db.profile references to
@@ -1268,34 +1265,69 @@ function EllesmereUI.DeleteProfile(name)
     for i, n in ipairs(db.profileOrder) do
         if n == name then table.remove(db.profileOrder, i); break end
     end
-    -- Clean up spec assignments
+
+    -- Clean up default spec assignments
     for specID, pName in pairs(db.specProfiles) do
-        if pName == name then db.specProfiles[specID] = nil end
+        if pName == name then
+            db.specProfiles[specID] = nil
+        end
     end
+
+    -- Clean up alt spec assignments
+    if db.specAltProfiles then
+        for specID, altSet in pairs(db.specAltProfiles) do
+            if altSet and altSet[name] then
+                altSet[name] = nil
+                if not next(altSet) then
+                    db.specAltProfiles[specID] = nil
+                end
+            end
+        end
+    end
+
     -- Clean up keybind
     EllesmereUI.OnProfileDeleted(name)
+
     -- If deleted profile was active, fall back to Default
     if db.activeProfile == name then
         db.activeProfile = "Default"
         RepointAllDBs("Default")
     end
 end
-
 function EllesmereUI.RenameProfile(oldName, newName)
     local db = GetProfilesDB()
     if not db.profiles[oldName] then return end
+
     db.profiles[newName] = db.profiles[oldName]
     db.profiles[oldName] = nil
+
     for i, n in ipairs(db.profileOrder) do
-        if n == oldName then db.profileOrder[i] = newName; break end
+        if n == oldName then
+            db.profileOrder[i] = newName
+            break
+        end
     end
+
     for specID, pName in pairs(db.specProfiles) do
-        if pName == oldName then db.specProfiles[specID] = newName end
+        if pName == oldName then
+            db.specProfiles[specID] = newName
+        end
     end
+
+    if db.specAltProfiles then
+        for specID, altSet in pairs(db.specAltProfiles) do
+            if altSet and altSet[oldName] then
+                altSet[oldName] = nil
+                altSet[newName] = true
+            end
+        end
+    end
+
     if db.activeProfile == oldName then
         db.activeProfile = newName
         RepointAllDBs(newName)
     end
+
     -- Update keybind reference
     EllesmereUI.OnProfileRenamed(oldName, newName)
 end
@@ -1342,6 +1374,14 @@ end
 function EllesmereUI.AssignProfileToSpec(profileName, specID)
     local db = GetProfilesDB()
     db.specProfiles[specID] = profileName
+
+    -- If this profile was an alt for the spec, remove it from alts
+    if db.specAltProfiles and db.specAltProfiles[specID] then
+        db.specAltProfiles[specID][profileName] = nil
+        if not next(db.specAltProfiles[specID]) then
+            db.specAltProfiles[specID] = nil
+        end
+    end
 end
 
 function EllesmereUI.UnassignSpec(specID)
@@ -1354,6 +1394,52 @@ function EllesmereUI.GetSpecProfile(specID)
     return db.specProfiles[specID]
 end
 
+function EllesmereUI.AddAltProfileToSpec(profileName, specID)
+    local db = GetProfilesDB()
+    if not db.specAltProfiles[specID] then
+        db.specAltProfiles[specID] = {}
+    end
+
+    -- Don't store the default profile as an alt too
+    if db.specProfiles[specID] == profileName then
+        return
+    end
+
+    db.specAltProfiles[specID][profileName] = true
+end
+
+function EllesmereUI.RemoveAltProfileFromSpec(profileName, specID)
+    local db = GetProfilesDB()
+    local altSet = db.specAltProfiles and db.specAltProfiles[specID]
+    if not altSet then return end
+
+    altSet[profileName] = nil
+    if not next(altSet) then
+        db.specAltProfiles[specID] = nil
+    end
+end
+
+function EllesmereUI.GetAltProfilesForSpec(specID)
+    local db = GetProfilesDB()
+    local out = {}
+    local altSet = db.specAltProfiles and db.specAltProfiles[specID]
+    if altSet then
+        for profileName in pairs(altSet) do
+            out[#out + 1] = profileName
+        end
+        table.sort(out)
+    end
+    return out
+end
+
+function EllesmereUI.ProfileBelongsToSpec(profileName, specID)
+    local db = GetProfilesDB()
+    if db.specProfiles and db.specProfiles[specID] == profileName then
+        return true
+    end
+    local altSet = db.specAltProfiles and db.specAltProfiles[specID]
+    return altSet and altSet[profileName] or false
+end
 -------------------------------------------------------------------------------
 --  AutoSaveActiveProfile: no-op in single-storage mode.
 --  Addons write directly to EllesmereUIDB.profiles[active].addons[folder],
@@ -1557,6 +1643,15 @@ do
                 end
             end
             if currentIsSpecAssigned then
+            -- No spec assignment for this character. If the current
+            -- activeProfile is spec-assigned (left over from a previous
+            -- character), switch to the last non-spec profile so this
+            -- character doesn't inherit another spec's layout.
+            local current = db.activeProfile or "Default"
+            local currentIsSpecAssigned =
+                IsProfileAssignedToAnySpec(current) or IsProfileAltForAnySpec(current)
+
+            if currentIsSpecAssigned then
                 -- Find the best fallback: lastNonSpecProfile, or any profile
                 -- that isn't spec-assigned, or Default as last resort.
                 local fallback = db.lastNonSpecProfile
@@ -1566,6 +1661,15 @@ do
                     if db.specProfiles then
                         for _, pName in pairs(db.specProfiles) do
                             specAssignedSet[pName] = true
+                        end
+                    end
+                    if db.specAltProfiles then
+                        for _, altSet in pairs(db.specAltProfiles) do
+                            if altSet then
+                                for pName in pairs(altSet) do
+                                    specAssignedSet[pName] = true
+                                end
+                            end
                         end
                     end
                     for _, pName in ipairs(db.profileOrder or {}) do
@@ -1587,6 +1691,7 @@ do
         end
     end)
 end
+
 
 -------------------------------------------------------------------------------
 --  Popular Presets & Weekly Spotlight
