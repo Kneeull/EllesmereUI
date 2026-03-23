@@ -5622,7 +5622,9 @@ end
 -- other EUI modules and releases control cleanly for external addons.
 local function ApplyBlizzCastbarState()
     if EllesmereUI and EllesmereUI.SetPlayerCastBarSuppressed and db and db.profile and db.profile.player then
-        EllesmereUI.SetPlayerCastBarSuppressed("UnitFrames", db.profile.player.showPlayerCastbar)
+        -- Suppress Blizzard whenever UnitFrames is managing player castbars,
+        -- including when the EUI player castbar is disabled.
+        EllesmereUI.SetPlayerCastBarSuppressed("UnitFrames", true)
     end
 end
 
