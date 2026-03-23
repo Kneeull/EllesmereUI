@@ -5947,6 +5947,279 @@ initFrame:SetScript("OnEvent", function(self)
 
         _, h = W:Spacer(parent, y, 20); y = y - h
 
+        -------------------------------------------------------------------
+        --  RAID MARKER
+        -------------------------------------------------------------------
+        local sharedRaidMarkerHeader
+        sharedRaidMarkerHeader, h = W:SectionHeader(parent, "RAID MARKER", y); y = y - h
+
+        local raidMarkerAlignValues = {
+            ["left"]   = "Left",
+            ["center"] = "Centre",
+            ["right"]  = "Right",
+        }
+        local raidMarkerAlignOrder = { "left", "center", "right" }
+
+        -- Row 1: Show Raid Marker (toggle) | Icon Size (slider)
+        local sharedRaidMarkerRow1
+        sharedRaidMarkerRow1, h = W:DualRow(parent, y,
+            { type = "toggle", text = "Show Raid Marker",
+              getValue = function()
+                  local v = SGet("raidMarkerEnabled")
+                  if v == nil then return true end
+                  return v
+              end,
+              setValue = function(v)
+                  UNIT_DB_MAP[selectedUnit]().raidMarkerEnabled = v
+                  ReloadAndUpdate()
+                  C_Timer.After(0, function()
+                      local rl = EllesmereUI._widgetRefreshList
+                      if rl then for i = 1, #rl do rl[i]() end end
+                  end)
+              end },
+            { type = "slider", text = "Icon Size", min = 12, max = 64, step = 1,
+              disabled = function()
+                  local v = SGet("raidMarkerEnabled")
+                  return v == false
+              end,
+              disabledTooltip = "Show Raid Marker is off",
+              getValue = function() return SVal("raidMarkerSize", 28) end,
+              setValue = function(v)
+                  SSet("raidMarkerSize", v)
+                  ReloadAndUpdate()
+              end });  y = y - h
+
+        -- Sync icon: Show Raid Marker (left)
+        do
+            local rgn = sharedRaidMarkerRow1._leftRegion
+            EllesmereUI.BuildSyncIcon({
+                region  = rgn,
+                tooltip = "Apply Raid Marker visibility to all Frames",
+                isSynced = function()
+                    local v = SVal("raidMarkerEnabled", true)
+                    for _, key in ipairs(GROUP_UNIT_ORDER) do
+                        local ov = UNIT_DB_MAP[key]().raidMarkerEnabled
+                        if ov == nil then ov = true end
+                        if ov ~= v then return false end
+                    end
+                    return true
+                end,
+                onClick = function()
+                    local v = SVal("raidMarkerEnabled", true)
+                    for _, key in ipairs(GROUP_UNIT_ORDER) do
+                        UNIT_DB_MAP[key]().raidMarkerEnabled = v
+                    end
+                    ReloadAndUpdate(); EllesmereUI:RefreshPage()
+                end,
+                flashTargets = function() return { rgn } end,
+                multiApply = {
+                    elementKeys   = GROUP_UNIT_ORDER,
+                    elementLabels = SHORT_LABELS,
+                    getCurrentKey = function() return selectedUnit end,
+                    onApply = function(checkedKeys)
+                        local v = SVal("raidMarkerEnabled", true)
+                        for _, key in ipairs(checkedKeys) do
+                            UNIT_DB_MAP[key]().raidMarkerEnabled = v
+                        end
+                        ReloadAndUpdate(); EllesmereUI:RefreshPage()
+                    end,
+                },
+            })
+        end
+
+        -- Sync icon: Icon Size (right)
+        do
+            local rgn = sharedRaidMarkerRow1._rightRegion
+            EllesmereUI.BuildSyncIcon({
+                region  = rgn,
+                tooltip = "Apply Raid Marker size to all Frames",
+                isSynced = function()
+                    local v = SVal("raidMarkerSize", 28)
+                    for _, key in ipairs(GROUP_UNIT_ORDER) do
+                        if (UNIT_DB_MAP[key]().raidMarkerSize or 28) ~= v then return false end
+                    end
+                    return true
+                end,
+                onClick = function()
+                    local v = SVal("raidMarkerSize", 28)
+                    for _, key in ipairs(GROUP_UNIT_ORDER) do
+                        UNIT_DB_MAP[key]().raidMarkerSize = v
+                    end
+                    ReloadAndUpdate(); EllesmereUI:RefreshPage()
+                end,
+                flashTargets = function() return { rgn } end,
+                multiApply = {
+                    elementKeys   = GROUP_UNIT_ORDER,
+                    elementLabels = SHORT_LABELS,
+                    getCurrentKey = function() return selectedUnit end,
+                    onApply = function(checkedKeys)
+                        local v = SVal("raidMarkerSize", 28)
+                        for _, key in ipairs(checkedKeys) do
+                            UNIT_DB_MAP[key]().raidMarkerSize = v
+                        end
+                        ReloadAndUpdate(); EllesmereUI:RefreshPage()
+                    end,
+                },
+            })
+        end
+
+        -- Row 2: Alignment (dropdown) | X Offset (slider)
+        local sharedRaidMarkerRow2
+        sharedRaidMarkerRow2, h = W:DualRow(parent, y,
+            { type = "dropdown", text = "Alignment",
+              values = raidMarkerAlignValues,
+              order  = raidMarkerAlignOrder,
+              disabled = function()
+                  local v = SGet("raidMarkerEnabled")
+                  return v == false
+              end,
+              disabledTooltip = "Show Raid Marker is off",
+              getValue = function() return SVal("raidMarkerAlign", "right") end,
+              setValue = function(v)
+                  SSet("raidMarkerAlign", v)
+                  SSet("raidMarkerX", 0)
+                  SSet("raidMarkerY", 0)
+                  ReloadAndUpdate()
+                  EllesmereUI:RefreshPage()
+              end },
+            { type = "slider", text = "X Offset", min = -200, max = 200, step = 1,
+              disabled = function()
+                  local v = SGet("raidMarkerEnabled")
+                  return v == false
+              end,
+              disabledTooltip = "Show Raid Marker is off",
+              getValue = function() return SVal("raidMarkerX", 0) end,
+              setValue = function(v)
+                  SSet("raidMarkerX", v)
+                  ReloadAndUpdate()
+              end });  y = y - h
+
+        -- Sync icon: Alignment (left)
+        do
+            local rgn = sharedRaidMarkerRow2._leftRegion
+            EllesmereUI.BuildSyncIcon({
+                region  = rgn,
+                tooltip = "Apply Raid Marker alignment to all Frames",
+                isSynced = function()
+                    local v = SVal("raidMarkerAlign", "right")
+                    for _, key in ipairs(GROUP_UNIT_ORDER) do
+                        if (UNIT_DB_MAP[key]().raidMarkerAlign or "right") ~= v then return false end
+                    end
+                    return true
+                end,
+                onClick = function()
+                    local v = SVal("raidMarkerAlign", "right")
+                    for _, key in ipairs(GROUP_UNIT_ORDER) do
+                        UNIT_DB_MAP[key]().raidMarkerAlign = v
+                    end
+                    ReloadAndUpdate(); EllesmereUI:RefreshPage()
+                end,
+                flashTargets = function() return { rgn } end,
+                multiApply = {
+                    elementKeys   = GROUP_UNIT_ORDER,
+                    elementLabels = SHORT_LABELS,
+                    getCurrentKey = function() return selectedUnit end,
+                    onApply = function(checkedKeys)
+                        local v = SVal("raidMarkerAlign", "right")
+                        for _, key in ipairs(checkedKeys) do
+                            UNIT_DB_MAP[key]().raidMarkerAlign = v
+                        end
+                        ReloadAndUpdate(); EllesmereUI:RefreshPage()
+                    end,
+                },
+            })
+        end
+
+        -- Sync icon: X Offset (right)
+        do
+            local rgn = sharedRaidMarkerRow2._rightRegion
+            EllesmereUI.BuildSyncIcon({
+                region  = rgn,
+                tooltip = "Apply Raid Marker X Offset to all Frames",
+                isSynced = function()
+                    local v = SVal("raidMarkerX", 0)
+                    for _, key in ipairs(GROUP_UNIT_ORDER) do
+                        if (UNIT_DB_MAP[key]().raidMarkerX or 0) ~= v then return false end
+                    end
+                    return true
+                end,
+                onClick = function()
+                    local v = SVal("raidMarkerX", 0)
+                    for _, key in ipairs(GROUP_UNIT_ORDER) do
+                        UNIT_DB_MAP[key]().raidMarkerX = v
+                    end
+                    ReloadAndUpdate(); EllesmereUI:RefreshPage()
+                end,
+                flashTargets = function() return { rgn } end,
+                multiApply = {
+                    elementKeys   = GROUP_UNIT_ORDER,
+                    elementLabels = SHORT_LABELS,
+                    getCurrentKey = function() return selectedUnit end,
+                    onApply = function(checkedKeys)
+                        local v = SVal("raidMarkerX", 0)
+                        for _, key in ipairs(checkedKeys) do
+                            UNIT_DB_MAP[key]().raidMarkerX = v
+                        end
+                        ReloadAndUpdate(); EllesmereUI:RefreshPage()
+                    end,
+                },
+            })
+        end
+
+        -- Row 3: Y Offset (slider) | empty
+        local sharedRaidMarkerRow3
+        sharedRaidMarkerRow3, h = W:DualRow(parent, y,
+            { type = "slider", text = "Y Offset", min = -200, max = 200, step = 1,
+              disabled = function()
+                  local v = SGet("raidMarkerEnabled")
+                  return v == false
+              end,
+              disabledTooltip = "Show Raid Marker is off",
+              getValue = function() return SVal("raidMarkerY", 0) end,
+              setValue = function(v)
+                  SSet("raidMarkerY", v)
+                  ReloadAndUpdate()
+              end },
+            { type = "label", text = "" });  y = y - h
+
+        -- Sync icon: Y Offset (left)
+        do
+            local rgn = sharedRaidMarkerRow3._leftRegion
+            EllesmereUI.BuildSyncIcon({
+                region  = rgn,
+                tooltip = "Apply Raid Marker Y Offset to all Frames",
+                isSynced = function()
+                    local v = SVal("raidMarkerY", 0)
+                    for _, key in ipairs(GROUP_UNIT_ORDER) do
+                        if (UNIT_DB_MAP[key]().raidMarkerY or 0) ~= v then return false end
+                    end
+                    return true
+                end,
+                onClick = function()
+                    local v = SVal("raidMarkerY", 0)
+                    for _, key in ipairs(GROUP_UNIT_ORDER) do
+                        UNIT_DB_MAP[key]().raidMarkerY = v
+                    end
+                    ReloadAndUpdate(); EllesmereUI:RefreshPage()
+                end,
+                flashTargets = function() return { rgn } end,
+                multiApply = {
+                    elementKeys   = GROUP_UNIT_ORDER,
+                    elementLabels = SHORT_LABELS,
+                    getCurrentKey = function() return selectedUnit end,
+                    onApply = function(checkedKeys)
+                        local v = SVal("raidMarkerY", 0)
+                        for _, key in ipairs(checkedKeys) do
+                            UNIT_DB_MAP[key]().raidMarkerY = v
+                        end
+                        ReloadAndUpdate(); EllesmereUI:RefreshPage()
+                    end,
+                },
+            })
+        end
+
+        _, h = W:Spacer(parent, y, 20); y = y - h
+
         local sharedAddHeader
         -------------------------------------------------------------------
         --  ADDITIONAL SETTINGS
@@ -6256,23 +6529,24 @@ initFrame:SetScript("OnEvent", function(self)
         --  Return click mapping targets + total height
         -------------------------------------------------------------------
         parent._sharedClickTargets = {
-            healthBar    = { section = sharedBarsHeader,     target = sharedSizeRow },
-            powerBar     = { section = sharedPowerHeader,    target = sharedPowerRow1, slotSide = "left" },
-            powerBarText = { section = sharedPowerHeader,    target = sharedPowerRow2, slotSide = "left" },
-            portrait     = { section = sharedPortraitHeader, target = sharedPortraitModeRow, slotSide = "left" },
-            nameText     = { section = sharedBarsHeader,     target = sharedTextRow, slotSide = "left" },
-            healthText   = { section = sharedBarsHeader,     target = sharedTextRow, slotSide = "right" },
-            centerText   = { section = sharedBarsHeader,     target = sharedCenterTextRow, slotSide = "left" },
-            classResource= { section = sharedClassResHeader, target = sharedClassResRow, slotSide = "left" },
-            btbBar       = { section = sharedBtbHeader,      target = sharedBtbToggleRow, slotSide = "left" },
-            btbLeftText  = { section = sharedBtbHeader,      target = sharedBtbTextRow, slotSide = "left" },
-            btbRightText = { section = sharedBtbHeader,      target = sharedBtbTextRow, slotSide = "right" },
-            btbCenterText= { section = sharedBtbHeader,      target = sharedBtbCenterRow, slotSide = "left" },
-            btbClassIcon = { section = sharedBtbHeader,      target = sharedBtbCenterRow, slotSide = "right" },
-            combatIndicator = { section = sharedAddHeader, target = sharedAddRow1, slotSide = "right" },
-            castBar      = { section = sharedCastHeader,     target = sharedCastRow1 },
-            castIcon     = { section = sharedCastHeader,     target = sharedCastRow1 },
-            castName     = { section = sharedCastHeader,     target = sharedCastRow1 },
+            healthBar    = { section = sharedBarsHeader,        target = sharedSizeRow },
+            powerBar     = { section = sharedPowerHeader,       target = sharedPowerRow1, slotSide = "left" },
+            powerBarText = { section = sharedPowerHeader,       target = sharedPowerRow2, slotSide = "left" },
+            portrait     = { section = sharedPortraitHeader,    target = sharedPortraitModeRow, slotSide = "left" },
+            nameText     = { section = sharedBarsHeader,        target = sharedTextRow, slotSide = "left" },
+            healthText   = { section = sharedBarsHeader,        target = sharedTextRow, slotSide = "right" },
+            centerText   = { section = sharedBarsHeader,        target = sharedCenterTextRow, slotSide = "left" },
+            classResource= { section = sharedClassResHeader,    target = sharedClassResRow, slotSide = "left" },
+            btbBar       = { section = sharedBtbHeader,         target = sharedBtbToggleRow, slotSide = "left" },
+            btbLeftText  = { section = sharedBtbHeader,         target = sharedBtbTextRow, slotSide = "left" },
+            btbRightText = { section = sharedBtbHeader,         target = sharedBtbTextRow, slotSide = "right" },
+            btbCenterText= { section = sharedBtbHeader,         target = sharedBtbCenterRow, slotSide = "left" },
+            btbClassIcon = { section = sharedBtbHeader,         target = sharedBtbCenterRow, slotSide = "right" },
+            combatIndicator = { section = sharedAddHeader,      target = sharedAddRow1, slotSide = "right" },
+            raidMarker   = { section = sharedRaidMarkerHeader,  target = sharedRaidMarkerRow2, slotSide = "left" },
+            castBar      = { section = sharedCastHeader,        target = sharedCastRow1 },
+            castIcon     = { section = sharedCastHeader,        target = sharedCastRow1 },
+            castName     = { section = sharedCastHeader,        target = sharedCastRow1 },
         }
 
         return y
