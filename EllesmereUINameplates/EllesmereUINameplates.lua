@@ -215,6 +215,7 @@ local defaults = {
     -- Bar texture overlay
     healthBarTexture = "none",
 }
+do
 -- Absorb defaults: key names and mode values stored on ns to avoid
 -- consuming file-scope local slot (we're at 200 and too complex errors now)
     local function _init()
