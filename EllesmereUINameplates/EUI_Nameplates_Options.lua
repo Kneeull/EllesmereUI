@@ -131,7 +131,7 @@ initFrame:SetScript("OnEvent", function(self)
     ---------------------------------------------------------------------------
     -- Append SharedMedia textures to the runtime ns tables first so both
     -- the dropdown AND the live nameplate rendering can resolve SM keys.
-    if EllesmereUI.AppendSharedMediaTextures then
+    if EllesmereUI.AppendSharedMediaTextures and ns.healthBarTextures then
         EllesmereUI.AppendSharedMediaTextures(
             ns.healthBarTextureNames or {},
             ns.healthBarTextureOrder or {},
@@ -4192,6 +4192,62 @@ initFrame:SetScript("OnEvent", function(self)
                 if ns.ApplyNamePlateClickArea then ns.ApplyNamePlateClickArea() end
                 UpdatePreview()
               end });  y = y - h
+
+        -- Absorb Shield Display Mode
+        local absorbModeRow
+        absorbModeRow, h = W:DualRow(parent, y,
+            { type="dropdown", text="Absorb Shield Display",
+              values={ overlay = "Overlay (Default)", bar = "Solid Overlay", none = "Hidden" },
+              getValue=function() return DBVal("absorbDisplayMode") or defaults.absorbDisplayMode end,
+              setValue=function(v)
+                DB().absorbDisplayMode = v
+                for _, plate in pairs(plates) do
+                    plate:UpdateHealthValues()
+                end
+                UpdatePreview()
+                EllesmereUI:RefreshPage()
+              end,
+              order={ "overlay", "bar", "none" },
+              tooltip="Overlay: shows the angled-stripe absorb texture over the health bar.\n\nSolid Overlay: shows the absorb as a solid color filling inward from the right edge of the health bar, visually replacing the health color. The HP value and percentage are unchanged.\n\nHidden: hides the absorb display entirely." },
+            nil);  y = y - h
+
+        -- Inline color swatch for absorb bar color (only relevant in "bar" mode)
+        do
+            local leftRgn = absorbModeRow._leftRegion
+            local function absorbBarColorOff()
+                return (DBVal("absorbDisplayMode") or defaults.absorbDisplayMode) ~= "bar"
+            end
+            local absorbBarColorGet = function()
+                local c = (DB() and DB().absorbBarColor) or defaults.absorbBarColor
+                return c.r, c.g, c.b
+            end
+            local absorbBarColorSet = function(r, g, b)
+                DB().absorbBarColor = { r = r, g = g, b = b }
+                for _, plate in pairs(plates) do
+                    plate:UpdateHealthValues()
+                end
+                UpdatePreview()
+            end
+            local abcSwatch, abcUpdateSwatch = EllesmereUI.BuildColorSwatch(leftRgn, leftRgn:GetFrameLevel() + 5, absorbBarColorGet, absorbBarColorSet, nil, 20)
+            PP.Point(abcSwatch, "RIGHT", leftRgn._control, "LEFT", -12, 0)
+            leftRgn._lastInline = abcSwatch
+            EllesmereUI.RegisterWidgetRefresh(function()
+                local off = absorbBarColorOff()
+                abcSwatch:SetAlpha(off and 0.15 or 1)
+                abcSwatch:EnableMouse(not off)
+                abcUpdateSwatch()
+            end)
+            abcSwatch:SetAlpha(absorbBarColorOff() and 0.15 or 1)
+            abcSwatch:EnableMouse(not absorbBarColorOff())
+            abcSwatch:SetScript("OnEnter", function(self)
+                if absorbBarColorOff() then
+                    EllesmereUI.ShowWidgetTooltip(self, EllesmereUI.DisabledTooltip("Set Absorb Display to 'Solid Overlay'"))
+                end
+            end)
+            abcSwatch:SetScript("OnLeave", function(self)
+                EllesmereUI.HideWidgetTooltip()
+            end)
+        end
 
         local function castIconOff() return DB() and DB().showCastIcon == false end
 

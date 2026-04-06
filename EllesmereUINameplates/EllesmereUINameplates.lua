@@ -215,6 +215,17 @@ local defaults = {
     -- Bar texture overlay
     healthBarTexture = "none",
 }
+-- Absorb defaults: key names and mode values stored on ns to avoid
+-- consuming file-scope local slot (we're at 200 and too complex errors now)
+    local function _init()
+        ns._K_ADM = "absorbDisplayMode"
+        ns._K_ABC = "absorbBarColor"
+        ns._ABS_BAR = "bar"
+        defaults[ns._K_ADM] = "overlay"
+        defaults[ns._K_ABC] = { r = 0.40, g = 0.65, b = 1.00 }
+    end
+    _init()
+end
 local BAR_W = 150
 ns.defaults = defaults
 ns.BAR_W = BAR_W
@@ -583,6 +594,17 @@ local function GetHealthBarWidth()
     return BAR_W + extra
 end
 ns.GetHealthBarWidth = GetHealthBarWidth
+
+local function GetAbsorbDisplayMode()
+    return (p and p[ns._K_ADM]) or defaults[ns._K_ADM]
+end
+ns.GetAbsorbDisplayMode = GetAbsorbDisplayMode
+
+local function GetAbsorbBarColor()
+    local c = (p and p[ns._K_ABC]) or defaults[ns._K_ABC]
+    return c.r, c.g, c.b
+end
+ns.GetAbsorbBarColor = GetAbsorbBarColor
 
 -- Returns the Y offset to apply to plate content when hitbox Y scale != 100%.
 -- SetNamePlateSize grows/shrinks the frame from its base anchor, so we shift
@@ -3309,6 +3331,16 @@ function NameplateFrame:ClearUnit()
     if self.rightArrow then self.rightArrow:Hide() end
     HideClassPowerOnPlate(self)
     self.absorb:Hide()
+    -- Reset absorb bar mode state so recycled plates start clean
+    if self._absorbBarMode then
+        self.absorb:SetStatusBarTexture("Interface\\AddOns\\EllesmereUINameplates\\Media\\absorb-default.png")
+        self.absorb:SetStatusBarColor(1, 1, 1, 0.8)
+        self.absorb:ClearAllPoints()
+        self.absorb:SetPoint("TOPRIGHT", self.health:GetStatusBarTexture(), "TOPRIGHT", 0, 0)
+        self.absorb:SetPoint("BOTTOMRIGHT", self.health:GetStatusBarTexture(), "BOTTOMRIGHT", 0, 0)
+        self.absorb:SetReverseFill(true)
+        self._absorbBarMode = nil
+    end
     if self.absorbOverflow then
     self.absorbOverflow:Hide()
     self.absorbOverflow:SetWidth(0)
@@ -3353,11 +3385,92 @@ function NameplateFrame:UpdateHealthValues()
         self.health:SetValue(self.hpCalculator:GetCurrentHealth())
     else
         local maxHealth = UnitHealthMax(unit)
-        self.health:SetMinMaxValues(0, maxHealth)
-        self.health:SetValue(UnitHealth(unit))
-        self.absorb:SetMinMaxValues(0, maxHealth)
-        self.absorb:SetValue(UnitGetTotalAbsorbs(unit))
-        self.absorb:Show()
+        local curHealth = UnitHealth(unit)
+        local totalAbsorb = UnitGetTotalAbsorbs(unit)
+        local absorbMode = GetAbsorbDisplayMode()
+
+        if absorbMode == "none" then
+            -- Hide absorb entirely, standard health bar
+            self.health:SetMinMaxValues(0, maxHealth)
+            self.health:SetValue(curHealth)
+            self.absorb:Hide()
+            if self.absorbOverflow then
+                self.absorbOverflow:Hide()
+                self.absorbOverflow:SetWidth(0)
+            end
+            if self.absorbOverflowDivider then
+                self.absorbOverflowDivider:Hide()
+            end
+            -- Restore absorb bar texture in case we switch back to overlay mode
+            if self._absorbBarMode then
+                self.absorb:SetStatusBarTexture("Interface\\AddOns\\EllesmereUINameplates\\Media\\absorb-default.png")
+                self.absorb:SetStatusBarColor(1, 1, 1, 0.8)
+                self.absorb:ClearAllPoints()
+                self.absorb:SetPoint("TOPRIGHT", self.health:GetStatusBarTexture(), "TOPRIGHT", 0, 0)
+                self.absorb:SetPoint("BOTTOMRIGHT", self.health:GetStatusBarTexture(), "BOTTOMRIGHT", 0, 0)
+                self.absorb:SetWidth(GetHealthBarWidth())
+                self.absorb:SetReverseFill(true)
+                self._absorbBarMode = nil
+            end
+        elseif absorbMode == ns._ABS_BAR then
+            -- "Bar" mode: show absorb as a solid-colored overlay that fills
+            -- from the right edge inward over the health bar.  This visually
+            -- "compresses" the health color: absorb replaces the health color
+            -- from the right, so health + absorb together fill the bar.
+            --
+            -- This avoids all arithmetic on secret/tainted values — only
+            -- StatusBar:SetMinMaxValues and SetValue (which accept secrets)
+            -- are used.
+            self.health:SetMinMaxValues(0, maxHealth)
+            self.health:SetValue(curHealth)
+
+            if not self._absorbBarMode then
+                self._absorbBarMode = true
+            end
+            local ar, ag, ab = GetAbsorbBarColor()
+            self.absorb:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+            self.absorb:SetStatusBarColor(ar, ag, ab, 1)
+            self.absorb:SetReverseFill(true)
+            self.absorb:SetMinMaxValues(0, maxHealth)
+            self.absorb:SetValue(totalAbsorb)
+
+            -- Anchor to the health fill texture's right edge so the absorb
+            -- sits directly adjacent to where the health color ends.
+            self.absorb:ClearAllPoints()
+            self.absorb:SetPoint("TOPRIGHT", self.health:GetStatusBarTexture(), "TOPRIGHT", 0, 0)
+            self.absorb:SetPoint("BOTTOMRIGHT", self.health:GetStatusBarTexture(), "BOTTOMRIGHT", 0, 0)
+            self.absorb:SetWidth(GetHealthBarWidth())
+            self.absorb:Show()
+
+            -- Hide overflow elements in bar mode
+            if self.absorbOverflow then
+                self.absorbOverflow:Hide()
+                self.absorbOverflow:SetWidth(0)
+            end
+            if self.absorbOverflowDivider then
+                self.absorbOverflowDivider:Hide()
+            end
+        else
+            -- "overlay" mode (default): standard absorb texture overlay on the health bar
+            self.health:SetMinMaxValues(0, maxHealth)
+            self.health:SetValue(curHealth)
+
+            -- Restore absorb overlay texture if previously in bar mode
+            if self._absorbBarMode then
+                self.absorb:SetStatusBarTexture("Interface\\AddOns\\EllesmereUINameplates\\Media\\absorb-default.png")
+                self.absorb:SetStatusBarColor(1, 1, 1, 0.8)
+                self.absorb:ClearAllPoints()
+                self.absorb:SetPoint("TOPRIGHT", self.health:GetStatusBarTexture(), "TOPRIGHT", 0, 0)
+                self.absorb:SetPoint("BOTTOMRIGHT", self.health:GetStatusBarTexture(), "BOTTOMRIGHT", 0, 0)
+                self.absorb:SetWidth(GetHealthBarWidth())
+                self.absorb:SetReverseFill(true)
+                self._absorbBarMode = nil
+            end
+
+            self.absorb:SetMinMaxValues(0, maxHealth)
+            self.absorb:SetValue(totalAbsorb)
+            self.absorb:Show()
+        end
     end
 
     -- Hash line positioning (target only)
@@ -4920,38 +5033,42 @@ do
         p[K_SNAP] = nil
     end
 
-    -- Store preset keys so the login handler can use them (set once, never changes)
-    ns._displayPresetKeys = {
-        "borderStyle", "borderColor", "targetGlowStyle", "showTargetArrows",
-        "showClassPower", "classPowerPos", "classPowerYOffset", "classPowerXOffset", "classPowerScale",
-        "classPowerClassColors", "classPowerCustomColor", "classPowerGap",
-        "textSlotTop", "textSlotRight", "textSlotLeft", "textSlotCenter",
-        "nameYOffset",
-        "healthBarHeight", "healthBarWidth", "castBarHeight",
-        "castNameSize", "castNameColor", "castTargetSize", "castTargetClassColor", "castTargetColor",
-        "showCastTimer", "castTimerSize", "castTimerColor", "targetScale",
-        "debuffSlot", "buffSlot", "ccSlot",
-        "debuffYOffset", "sideAuraXOffset", "auraSpacing",
-        "debuffTimerPosition", "buffTimerPosition", "ccTimerPosition",
-        "auraDurationTextSize", "auraDurationTextColor",
-        "auraStackTextSize", "auraStackTextColor",
-        "buffTextSize", "buffTextColor", "ccTextSize", "ccTextColor",
-        "raidMarkerPos",
-        "classificationSlot",
-        -- Slot-based size + XY offsets
-        "topSlotSize", "topSlotXOffset", "topSlotYOffset",
-        "rightSlotSize", "rightSlotXOffset", "rightSlotYOffset",
-        "leftSlotSize", "leftSlotXOffset", "leftSlotYOffset",
-        "toprightSlotSize", "toprightSlotXOffset", "toprightSlotYOffset", "toprightSlotGrowth",
-        "topleftSlotSize", "topleftSlotXOffset", "topleftSlotYOffset", "topleftSlotGrowth",
-        -- Text slot size + XY offsets
-        "textSlotTopSize", "textSlotTopXOffset", "textSlotTopYOffset",
-        "textSlotRightSize", "textSlotRightXOffset", "textSlotRightYOffset",
-        "textSlotLeftSize", "textSlotLeftXOffset", "textSlotLeftYOffset",
-        "textSlotCenterSize", "textSlotCenterXOffset", "textSlotCenterYOffset",
-        -- Text slot color keys
-        "textSlotTopColor", "textSlotRightColor", "textSlotLeftColor", "textSlotCenterColor",
-    }
+    -- Store preset keys so the login handler can use them (set once, never changes).
+    -- Done like this to avoid the wonderful errors of Lua and too Complex.
+    ns._displayPresetKeys = (function()
+        local t = {
+            "borderStyle", "borderColor", "targetGlowStyle", "showTargetArrows",
+            "showClassPower", "classPowerPos", "classPowerYOffset", "classPowerXOffset", "classPowerScale",
+            "classPowerClassColors", "classPowerCustomColor", "classPowerGap",
+            "textSlotTop", "textSlotRight", "textSlotLeft", "textSlotCenter",
+            "nameYOffset",
+            "healthBarHeight", "healthBarWidth", "castBarHeight",
+            ns._K_ADM, ns._K_ABC,
+            "castNameSize", "castNameColor", "castTargetSize", "castTargetClassColor", "castTargetColor",
+            "showCastTimer", "castTimerSize", "castTimerColor", "targetScale",
+            "debuffSlot", "buffSlot", "ccSlot",
+            "debuffYOffset", "sideAuraXOffset", "auraSpacing",
+            "debuffTimerPosition", "buffTimerPosition", "ccTimerPosition",
+            "auraDurationTextSize", "auraDurationTextColor",
+            "auraStackTextSize", "auraStackTextColor",
+            "buffTextSize", "buffTextColor", "ccTextSize", "ccTextColor",
+            "raidMarkerPos", "classificationSlot",
+        }
+        local t2 = {
+            "topSlotSize", "topSlotXOffset", "topSlotYOffset",
+            "rightSlotSize", "rightSlotXOffset", "rightSlotYOffset",
+            "leftSlotSize", "leftSlotXOffset", "leftSlotYOffset",
+            "toprightSlotSize", "toprightSlotXOffset", "toprightSlotYOffset", "toprightSlotGrowth",
+            "topleftSlotSize", "topleftSlotXOffset", "topleftSlotYOffset", "topleftSlotGrowth",
+            "textSlotTopSize", "textSlotTopXOffset", "textSlotTopYOffset",
+            "textSlotRightSize", "textSlotRightXOffset", "textSlotRightYOffset",
+            "textSlotLeftSize", "textSlotLeftXOffset", "textSlotLeftYOffset",
+            "textSlotCenterSize", "textSlotCenterXOffset", "textSlotCenterYOffset",
+            "textSlotTopColor", "textSlotRightColor", "textSlotLeftColor", "textSlotCenterColor",
+        }
+        for _, s in ipairs(t2) do t[#t+1] = s end
+        return t
+    end)()
 
     -- Also handle spec changes that happen before the UI is ever opened
     local specLoginFrame = CreateFrame("Frame")
