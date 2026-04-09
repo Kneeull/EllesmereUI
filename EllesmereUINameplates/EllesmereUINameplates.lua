@@ -156,7 +156,6 @@ local defaults = {
     classificationSlot = "topleft",
     rareEliteIconSize = 20,
     castBarHeight = 17,
-    castOverlayEnabled = false,
     castNameSize = 10,
     castNameColor = { r = 1, g = 1, b = 1 },
     castTargetSize = 10,
@@ -487,11 +486,9 @@ local function GetShowCastIcon()
     if p and p.showCastIcon ~= nil then return p.showCastIcon end
     return defaults.showCastIcon
 end
-ns.GetShowCastIcon = GetShowCastIcon
 local function GetCastIconScale()
     return (p and p.castIconScale) or defaults.castIconScale
 end
-ns.GetCastIconScale = GetCastIconScale
 local function GetKickTickEnabled()
     if p and p.kickTickEnabled ~= nil then return p.kickTickEnabled end
     return true
@@ -1511,7 +1508,7 @@ local frameCache = CreateFramePool("Frame", UIParent, nil, nil, false, function(
     plate.kickTick:SetPoint("TOP", plate.kickMarker, "TOP", 0, 0)
     plate.kickTick:SetPoint("BOTTOM", plate.kickMarker, "BOTTOM", 0, 0)
     plate.kickTick:SetPoint("LEFT", plate.kickMarker:GetStatusBarTexture(), "RIGHT")
-    -- Cast bar text: three independent fixed zones
+    -- Cast bar text: three independent fixed zones (Plater pattern).
     -- [castName LEFT 50%] [castTarget CENTER-RIGHT 25%] [castTimer RIGHT 15%]
     plate.castName = plate.cast:CreateFontString(nil, "OVERLAY")
     SetFSFont(plate.castName, 10, GetNPOutline())
@@ -1728,10 +1725,6 @@ local function ComputeCastBarTint(readyTint, baseTint)
     local bVal = C_CurveUtil.EvaluateColorValueFromBoolean(offCooldown, baseTint.b, readyTint.b)
     return rVal, gVal, bVal
 end
--- Exposed for the cast overlay file (EllesmereUINameplates_CastOverlay.lua)
--- so the overlay bar can apply the same interrupt-ready tint as the on-plate
--- cast bar without duplicating the logic.
-ns.ComputeCastBarTint = ComputeCastBarTint
 function ns.RefreshBorderStyle()
     for _, plate in pairs(ns.plates) do
         if plate.ApplyBorderStyle then
@@ -1905,23 +1898,14 @@ local function SetupAuraCVars()
         local nameOnly = (db.friendlyNameOnly ~= false)
         local showPlayers = (db.showFriendlyPlayers ~= false)
         local showNPCs = (db.showFriendlyNPCs == true)
-        -- Friendly player CVars are only written when EUI is managing
-        -- friendly player nameplates. When the user disables the "Show EUI
-        -- Friendly Player Nameplates" toggle we relinquish control fully
-        -- and leave these CVars alone so Blizzard's own Nameplate settings
-        -- own them. Friendly NPC and enemy pet CVars are always managed.
-        if showPlayers then
-            SetCVar("nameplateShowOnlyNameForFriendlyPlayerUnits", nameOnly and 1 or 0)
-            SetCVar("nameplateShowFriendlyPlayers", 1)
-            SetCVar("UnitNameFriendlyPlayerName", 1)
-            SetCVar("nameplateShowFriends", 1)
-        end
+        SetCVar("nameplateShowOnlyNameForFriendlyPlayerUnits", nameOnly and 1 or 0)
+        SetCVar("nameplateShowFriendlyPlayers", showPlayers and 1 or 0)
+        SetCVar("UnitNameFriendlyPlayerName", showPlayers and 1 or 0)
+        SetCVar("nameplateShowFriends", showPlayers and 1 or 0)
         SetCVar("nameplateShowFriendlyNPCs", showNPCs and 1 or 0)
         SetCVar("nameplateShowFriendlyNpcs", showNPCs and 1 or 0)
         SetCVar("nameplateShowEnemyPets", (db.showEnemyPets == true) and 1 or 0)
-        if showPlayers then
-            SetCVar("ShowClassColorInFriendlyNameplate", (db.classColorFriendly ~= false) and 1 or 0)
-        end
+        SetCVar("ShowClassColorInFriendlyNameplate", (db.classColorFriendly ~= false) and 1 or 0)
         SetCVar("ShowClassColorInNameplate", 1)
         SetCVar("nameplateSize", 3)
         SetCVar("nameplateShowAll", 1)
@@ -1936,9 +1920,7 @@ local function SetupAuraCVars()
         SetCVar("nameplateMaxScale", 1)
         SetCVar("nameplateTargetBehindMaxDistance", 30)
         SetCVar("clampTargetNameplateToScreen", 1)
-        if showPlayers then
-            SetCVar("nameplateUseClassColorForFriendlyPlayerUnitNames", (db.classColorFriendly ~= false) and 1 or 0)
-        end
+        SetCVar("nameplateUseClassColorForFriendlyPlayerUnitNames", (db.classColorFriendly ~= false) and 1 or 0)
     end
     -- Hide realm names on friendly nameplates inside instances
     if NamePlateFriendlyFrameOptions and TextureLoadingGroupMixin then
@@ -3278,7 +3260,7 @@ end
 end
 function NameplateFrame:ClearUnit()
     self:UnregisterAllEvents()
-
+    
     if self.isCasting then
         self.isCasting = false
         if self._castFallback then
@@ -3289,8 +3271,6 @@ function NameplateFrame:ClearUnit()
         end
         NotifyCastEnded()
     end
-    -- Release elevated cast overlay (plate going away)
-    if ns.RefreshCastOverlay then ns.RefreshCastOverlay(self) end
     
     self.name:SetText("")
     for i = 1, 2 do
@@ -4263,8 +4243,6 @@ function NameplateFrame:UpdateCast()
         if GetShowClassPower() and classPowerType and self._cpPips and self.unit and UnitIsUnit(self.unit, "target") then
             UpdateClassPowerOnPlate(self)
         end
-        -- Release elevated cast overlay (cast ended)
-        if ns.RefreshCastOverlay then ns.RefreshCastOverlay(self) end
         return
     end
 
@@ -4366,8 +4344,6 @@ function NameplateFrame:UpdateCast()
     if GetShowClassPower() and classPowerType and self._cpPips and self.unit and UnitIsUnit(self.unit, "target") then
         UpdateClassPowerOnPlate(self)
     end
-    -- Refresh elevated cast overlay (acquires/releases as needed)
-    if ns.RefreshCastOverlay then ns.RefreshCastOverlay(self) end
 end
 function NameplateFrame:ApplyScale()
     local base = 1
@@ -4395,12 +4371,6 @@ function NameplateFrame:ApplyCastColor(uninterruptible)
         local a = uninterruptible and 1 or 0
         self.castBarOverlay:SetAlpha(a)
         self.castShieldFrame:SetAlpha(a)
-    end
-    -- Propagate to the elevated cast overlay (if active for this plate) so
-    -- the overlay's bar color tracks kick-ready / uninterruptible state the
-    -- same way the on-plate cast bar does.
-    if ns.RefreshCastOverlayColor then
-        ns.RefreshCastOverlayColor(self, uninterruptible)
     end
 end
 function NameplateFrame:HideKickTick()
