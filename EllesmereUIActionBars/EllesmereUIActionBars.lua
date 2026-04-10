@@ -2323,10 +2323,23 @@ local function ComputeBarLayout(key)
         end
     end
 
+    -- Compute frame size in integer physical pixels first, then convert
+    -- back to coord. Multiplying snapped coord values (e.g. 21.6666... * 3)
+    -- compounds floating-point dust; PP.Scale's floor then loses 1 phys px
+    -- when the result lands just below an integer pixel. The button row
+    -- ends up rendering one pixel wider/taller than the frame, leaving
+    -- the last button protruding past the mover overlay.
     local totalCols = isVertical and numRows or stride
     local totalRows = isVertical and stride or numRows
-    local frameW = SnapForScale(totalCols * btnW + (totalCols - 1) * padding + extraWC * onePxC, 1)
-    local frameH = SnapForScale(totalRows * btnH + (totalRows - 1) * padding + extraHC * onePxC, 1)
+    local PPlc = EllesmereUI and EllesmereUI.PP
+    local onePxLc = PPlc and PPlc.mult or 1
+    local btnWPx     = math.floor(btnW    / onePxLc + 0.5)
+    local btnHPx     = math.floor(btnH    / onePxLc + 0.5)
+    local paddingPx  = math.floor(padding / onePxLc + 0.5)
+    local frameWPx = totalCols * btnWPx + (totalCols - 1) * paddingPx + extraWC
+    local frameHPx = totalRows * btnHPx + (totalRows - 1) * paddingPx + extraHC
+    local frameW = frameWPx * onePxLc
+    local frameH = frameHPx * onePxLc
     return result, max(frameW, 1), max(frameH, 1)
 end
 
@@ -2582,8 +2595,17 @@ local function LayoutBar(key)
     end
     for i = 1, #buttons do
         local btn = buttons[i]
-        if btn and not InCombatLockdown() then
-            btn:SetAttribute("flyoutDirection", flyDir)
+        if btn then
+            -- Ensure the button has GetPopupDirection for Blizzard's SpellFlyout system
+            -- (must be available on all buttons, regardless of squareIcons setting)
+            if not btn.GetPopupDirection then
+                btn.GetPopupDirection = function(self)
+                    return self:GetAttribute("flyoutDirection") or "UP"
+                end
+            end
+            if not InCombatLockdown() then
+                btn:SetAttribute("flyoutDirection", flyDir)
+            end
         end
     end
 
@@ -2604,14 +2626,18 @@ local function LayoutBar(key)
         end
     end
 
-    -- Clear the resize guard so NotifyElementResized works normally again
-    if EllesmereUI then
-        EllesmereUI._layoutBarResizing = nil
-    end
-
-    -- Notify the position system for width/height match propagation and anchor chains
+    -- Notify the position system for width/height match propagation and anchor chains.
+    -- Keep _layoutBarResizing set so NotifyElementResized skips position
+    -- re-application (LayoutBar already positioned the bar from the captured
+    -- edge). Clearing after prevents CENTER->edge->CENTER round-trip drift
+    -- caused by double PP-snapping on each combat exit.
     if EllesmereUI and EllesmereUI.NotifyElementResized then
         EllesmereUI.NotifyElementResized(key)
+    end
+
+    -- Clear the resize guard after NotifyElementResized is done
+    if EllesmereUI then
+        EllesmereUI._layoutBarResizing = nil
     end
 
     -- Propagate anchor chain so anything anchored to this bar follows the resize
@@ -5775,10 +5801,17 @@ function EAB.AnchorVehicleButton()
         local pt = pos.point
         local px, py = pos.x, pos.y
         local PPa = EllesmereUI and EllesmereUI.PP
-        if PPa and PPa.SnapForES and px and py then
+        if PPa and px and py then
             local es = btn:GetEffectiveScale()
-            px = PPa.SnapForES(px, es)
-            py = PPa.SnapForES(py, es)
+            local isCenterAnchor = (pt == "CENTER")
+                and (pos.relPoint == "CENTER" or pos.relPoint == nil)
+            if isCenterAnchor and PPa.SnapCenterForDim then
+                px = PPa.SnapCenterForDim(px, btn:GetWidth() or 0, es)
+                py = PPa.SnapCenterForDim(py, btn:GetHeight() or 0, es)
+            elseif PPa.SnapForES then
+                px = PPa.SnapForES(px, es)
+                py = PPa.SnapForES(py, es)
+            end
         end
         btn:SetPoint(pt, UIParent, pos.relPoint or pt, px, py)
     else
@@ -5988,6 +6021,7 @@ local function ApplyAll()
 
     EAB:ApplyPushedTextures()
     EAB:ApplyHighlightTextures()
+    EAB:ApplyCooldownFonts()
     EAB:ApplyCooldownEdge()
     EAB:ApplyMiscTextures()
     if not inCombat then EAB:ApplyCombatVisibility() end
@@ -6037,11 +6071,20 @@ local function RestoreBarPositions()
             if pt == "CENTER" and rpt == "CENTER" and px == 0 and py == 0 then
                 -- skip
             else
-                -- Snap to physical pixel grid
-                if PPa and PPa.SnapForES then
+                -- Snap to physical pixel grid. For CENTER-anchored bars use
+                -- SnapCenterForDim with the frame's actual size so odd-pixel
+                -- dimensions get the +0.5 center offset they need (plain
+                -- SnapForES drifts by 1px on save & exit for odd dimensions).
+                if PPa then
                     local es = frame:GetEffectiveScale()
-                    px = PPa.SnapForES(px, es)
-                    py = PPa.SnapForES(py, es)
+                    local isCenterAnchor = (pt == "CENTER" and rpt == "CENTER")
+                    if isCenterAnchor and PPa.SnapCenterForDim then
+                        px = PPa.SnapCenterForDim(px, frame:GetWidth() or 0, es)
+                        py = PPa.SnapCenterForDim(py, frame:GetHeight() or 0, es)
+                    elseif PPa.SnapForES then
+                        px = PPa.SnapForES(px, es)
+                        py = PPa.SnapForES(py, es)
+                    end
                 end
                 frame:ClearAllPoints()
                 frame:SetPoint(pt, UIParent, rpt, px, py)
@@ -6195,10 +6238,17 @@ local function RegisterWithUnlockMode()
                     local pt = pos.point
                     local px, py = pos.x, pos.y
                     local PPa = EllesmereUI and EllesmereUI.PP
-                    if PPa and PPa.SnapForES and px and py then
+                    if PPa and px and py then
                         local es = frame:GetEffectiveScale()
-                        px = PPa.SnapForES(px, es)
-                        py = PPa.SnapForES(py, es)
+                        local isCenterAnchor = (pt == "CENTER")
+                            and (pos.relPoint == "CENTER" or pos.relPoint == nil)
+                        if isCenterAnchor and PPa.SnapCenterForDim then
+                            px = PPa.SnapCenterForDim(px, frame:GetWidth() or 0, es)
+                            py = PPa.SnapCenterForDim(py, frame:GetHeight() or 0, es)
+                        elseif PPa.SnapForES then
+                            px = PPa.SnapForES(px, es)
+                            py = PPa.SnapForES(py, es)
+                        end
                     end
                     frame:ClearAllPoints()
                     frame:SetPoint(pt, UIParent, pos.relPoint or pt, px, py)
@@ -6257,10 +6307,17 @@ local function RegisterWithUnlockMode()
                         local pt = pos.point
                         local px, py = pos.x, pos.y
                         local PPa = EllesmereUI and EllesmereUI.PP
-                        if PPa and PPa.SnapForES and px and py then
+                        if PPa and px and py then
                             local es = holder:GetEffectiveScale()
-                            px = PPa.SnapForES(px, es)
-                            py = PPa.SnapForES(py, es)
+                            local isCenterAnchor = (pt == "CENTER")
+                                and (pos.relPoint == "CENTER" or pos.relPoint == nil)
+                            if isCenterAnchor and PPa.SnapCenterForDim then
+                                px = PPa.SnapCenterForDim(px, holder:GetWidth() or 0, es)
+                                py = PPa.SnapCenterForDim(py, holder:GetHeight() or 0, es)
+                            elseif PPa.SnapForES then
+                                px = PPa.SnapForES(px, es)
+                                py = PPa.SnapForES(py, es)
+                            end
                         end
                         holder:SetPoint(pt, UIParent, pos.relPoint or pt, px, py)
                     else
@@ -6324,25 +6381,11 @@ function EAB:OnInitialize()
 
     self.db = EllesmereUI.Lite.NewDB("EllesmereUIActionBarsDB", defaults, true)
 
-    -- Round width/height to whole pixels (one-time migration)
-    if self.db.profile and self.db.profile.bars and EllesmereUI.RoundSizeFields then
-        local sizeKeys = { "buttonWidth", "buttonHeight" }
-        for _, barSettings in pairs(self.db.profile.bars) do
-            if type(barSettings) == "table" then
-                EllesmereUI.RoundSizeFields(sizeKeys, { barSettings })
-            end
-        end
-    end
-
     -- Mark whether we need to capture Blizzard layout on first install.
     -- The actual capture is deferred to PLAYER_ENTERING_WORLD when
     -- Edit Mode has fully applied bar positions/sizes.
     -- Uses the per-install flag on the SV root, not per-profile.
     local sv = self.db.sv
-    -- Migrate old shared flag to per-addon key (v5.9.6+)
-    if sv._capturedOnce and not sv._capturedOnce_EAB then
-        sv._capturedOnce_EAB = true
-    end
     self._needsCapture = not sv._capturedOnce_EAB
 
     -- Slash commands
@@ -6671,6 +6714,12 @@ function EAB:FinishSetup()
         -- Visual styling: defer visuals to out-of-combat if needed.
         local function DoVisuals()
             ApplyAll()
+            -- Reapply unlock-mode positions + anchor chains now that bars exist.
+            -- (The EUI_UnlockMode hook on EAB.ApplyAll doesn't fire because
+            -- ApplyAll is a local function, not on the addon table.)
+            if EllesmereUI._applySavedPositions then
+                C_Timer_After(1.5, EllesmereUI._applySavedPositions)
+            end
             ApplyKeyDownCVar()
             self:SyncEditModeIcons()
             self:HookProcGlow()
@@ -8804,3 +8853,4 @@ _qkbHookFrame:SetScript("OnEvent", function(self, event)
         end
     end
 end)
+

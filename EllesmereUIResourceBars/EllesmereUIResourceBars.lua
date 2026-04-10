@@ -11,14 +11,23 @@ ns.ERB = ERB
 
 local PP = EllesmereUI.PP
 
--- Snap x/y to the physical pixel grid for a given frame's effective scale.
-local function SnapXY(x, y, frame)
+-- Snap x/y to the physical pixel grid for a given frame.
+-- Optional `pos` table provides the anchor type so CENTER-anchored positions
+-- get dim-aware snapping (preserves the +0.5 center offset that odd-pixel-dim
+-- frames need so their edges land on whole physical pixels).
+local function SnapXY(x, y, frame, pos)
     local PPa = EllesmereUI and EllesmereUI.PP
-    if PPa and PPa.SnapForES and x and y and frame then
-        local es = frame:GetEffectiveScale()
+    if not (PPa and x and y and frame) then return x or 0, y or 0 end
+    local es = frame:GetEffectiveScale()
+    local isCenterAnchor = pos and (pos.point == "CENTER")
+        and (pos.relPoint == "CENTER" or pos.relPoint == nil)
+    if isCenterAnchor and PPa.SnapCenterForDim then
+        return PPa.SnapCenterForDim(x, frame:GetWidth() or 0, es),
+               PPa.SnapCenterForDim(y, frame:GetHeight() or 0, es)
+    elseif PPa.SnapForES then
         return PPa.SnapForES(x, es), PPa.SnapForES(y, es)
     end
-    return x or 0, y or 0
+    return x, y
 end
 
 local floor, ceil, abs, min, max = math.floor, math.ceil, math.abs, math.min, math.max
@@ -746,10 +755,10 @@ local function CreateStatusBar(parent, name, w, h, borderSize, borderR, borderG,
         self._border:SetShown(sz > 0)
     end
 
-    -- Text overlay (on outer container, not clipped)
+    -- Text overlay (above all bar borders)
     local textFrame = CreateFrame("Frame", nil, bar)
     textFrame:SetAllPoints(bar)
-    textFrame:SetFrameLevel(bar:GetFrameLevel() + 2)
+    textFrame:SetFrameLevel(25)
     textFrame:EnableMouse(false)
     local text = textFrame:CreateFontString(nil, "OVERLAY")
     SetRBFont(text, GetRBFont(), 11)
@@ -931,10 +940,23 @@ local function RegisterUnlockElements()
                 local pt = pos.point
                 local px, py = pos.x, pos.y
                 local PPa = EllesmereUI and EllesmereUI.PP
-                if PPa and PPa.SnapForES and px and py then
+                if PPa and px and py then
                     local es = f:GetEffectiveScale()
-                    px = PPa.SnapForES(px, es)
-                    py = PPa.SnapForES(py, es)
+                    -- For CENTER anchor with stored CENTER offsets, use
+                    -- SnapCenterForDim with the frame's actual size so odd-
+                    -- pixel-dim frames get the +0.5 center offset that places
+                    -- their edges on whole pixels (plain SnapForES rounds the
+                    -- center to a whole pixel and forces edges to half pixels,
+                    -- causing 1px drift on save & exit / spec swap).
+                    local isCenterAnchor = (pt == "CENTER")
+                        and (pos.relPoint == "CENTER" or pos.relPoint == nil)
+                    if isCenterAnchor and PPa.SnapCenterForDim then
+                        px = PPa.SnapCenterForDim(px, f:GetWidth() or 0, es)
+                        py = PPa.SnapCenterForDim(py, f:GetHeight() or 0, es)
+                    elseif PPa.SnapForES then
+                        px = PPa.SnapForES(px, es)
+                        py = PPa.SnapForES(py, es)
+                    end
                 end
                 f:ClearAllPoints()
                 f:SetPoint(pt, UIParent, pos.relPoint or pt, px, py)
@@ -1051,7 +1073,7 @@ local function RegisterUnlockElements()
             if not pos then return end
             if castBarFrame then
                 local pt = pos.point
-                local sx, sy = SnapXY(pos.x, pos.y, castBarFrame)
+                local sx, sy = SnapXY(pos.x, pos.y, castBarFrame, pos)
                 castBarFrame:ClearAllPoints()
                 castBarFrame:SetPoint(pt, UIParent, pos.relPoint or pt, sx, sy)
             end
@@ -1268,7 +1290,7 @@ local function ApplyFreeBarPosition(frame, settings, defaultX, defaultY, width, 
     frame:ClearAllPoints()
 
     if pos and pos.point then
-        local sx, sy = SnapXY(pos.x, pos.y, frame)
+        local sx, sy = SnapXY(pos.x, pos.y, frame, pos)
         frame:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, sx, sy)
         return
     end
@@ -1436,7 +1458,7 @@ local function BuildBars()
             healthBar:SetSize(ow, oh)
             if not EllesmereUI._unlockActive then
                 if not EllesmereUI.IsUnlockAnchored("ERB_Health") or not healthBar:GetLeft() then
-                    local sx, sy = SnapXY(hp.unlockPos.x, hp.unlockPos.y, healthBar)
+                    local sx, sy = SnapXY(hp.unlockPos.x, hp.unlockPos.y, healthBar, hp.unlockPos)
                     healthBar:ClearAllPoints()
                     healthBar:SetPoint(hp.unlockPos.point, UIParent, rp, sx, sy)
                 end
@@ -1544,7 +1566,7 @@ local function BuildBars()
             primaryBar:SetSize(ow, oh)
             if not EllesmereUI._unlockActive then
                 if not EllesmereUI.IsUnlockAnchored("ERB_Power") or not primaryBar:GetLeft() then
-                    local sx, sy = SnapXY(pp.unlockPos.x, pp.unlockPos.y, primaryBar)
+                    local sx, sy = SnapXY(pp.unlockPos.x, pp.unlockPos.y, primaryBar, pp.unlockPos)
                     primaryBar:ClearAllPoints()
                     primaryBar:SetPoint(pp.unlockPos.point, UIParent, rp, sx, sy)
                 end
@@ -1618,7 +1640,7 @@ local function BuildBars()
         if not EllesmereUI.IsUnlockAnchored("ERB_Power") then
             if pp.unlockPos and pp.unlockPos.point then
                 local rp = pp.unlockPos.relPoint or pp.unlockPos.point
-                local sx, sy = SnapXY(pp.unlockPos.x, pp.unlockPos.y, primaryBar)
+                local sx, sy = SnapXY(pp.unlockPos.x, pp.unlockPos.y, primaryBar, pp.unlockPos)
                 primaryBar:ClearAllPoints()
                 primaryBar:SetPoint(pp.unlockPos.point, UIParent, rp, sx, sy)
             elseif not primaryBar:GetLeft() then
@@ -1696,7 +1718,7 @@ local function BuildBars()
             secondaryFrame:SetSize(frameW, frameH)
             if not EllesmereUI._unlockActive then
                 if not EllesmereUI.IsUnlockAnchored("ERB_ClassResource") or not secondaryFrame:GetLeft() then
-                    local sx, sy = SnapXY(sp.unlockPos.x, sp.unlockPos.y, secondaryFrame)
+                    local sx, sy = SnapXY(sp.unlockPos.x, sp.unlockPos.y, secondaryFrame, sp.unlockPos)
                     secondaryFrame:ClearAllPoints()
                     secondaryFrame:SetPoint(sp.unlockPos.point, UIParent, sp.unlockPos.relPoint or sp.unlockPos.point, sx, sy)
                 end
@@ -1752,9 +1774,12 @@ local function BuildBars()
             secondaryBar:SetAllPoints(secondaryFrame)
 
             -- Bar texture and orientation must be applied before colors since
-            -- SetStatusBarTexture and SetRotatesTexture both reset vertex color
+            -- SetStatusBarTexture and SetRotatesTexture both reset vertex color.
+            -- Use the Class Resource's own pipOrientation setting (same key the
+            -- dropdown writes to), not p.general.orientation which was unrelated
+            -- and caused vertical fill to render horizontally.
             ApplyBarTexture(secondaryBar, g.barTexture or "none")
-            ApplyBarOrientation(secondaryBar, p.general.orientation)
+            ApplyBarOrientation(secondaryBar, pipOri)
 
             -- Colors
             local pc = POWER_COLORS[cachedSecondary.power]
@@ -1797,10 +1822,17 @@ local function BuildBars()
                     runeFrames[i] = CreatePip(secondaryFrame, 20, pipH, i,
                         0, 0, 0, 0, 0)
                     local cdText = runeFrames[i]:CreateFontString(nil, "OVERLAY")
-                    SetRBFont(cdText, GetRBFont(), 9)
                     cdText:SetTextColor(1, 1, 1, 0.8)
-                    cdText:SetPoint("CENTER")
                     runeFrames[i]._cdText = cdText
+                end
+                -- Re-apply font size and offsets every rebuild so textSize,
+                -- textXOffset, and textYOffset changes take effect live
+                local cdText = runeFrames[i]._cdText
+                if cdText then
+                    SetRBFont(cdText, GetRBFont(), sp.textSize or 9)
+                    cdText:ClearAllPoints()
+                    cdText:SetPoint("CENTER", runeFrames[i], "CENTER",
+                        sp.textXOffset or 0, sp.textYOffset or 0)
                 end
                 local x0 = slots[i].x0
                 local x1 = slots[i].x1
@@ -1929,13 +1961,13 @@ local function BuildBars()
                     secondaryFrame._countTextOverlay = CreateFrame("Frame", nil, secondaryFrame)
                     secondaryFrame._countTextOverlay:SetAllPoints(secondaryFrame)
                 end
-                secondaryFrame._countTextOverlay:SetFrameLevel(secondaryFrame:GetFrameLevel() + 10)
+                secondaryFrame._countTextOverlay:SetFrameLevel(25)
                 secondaryFrame._countText = secondaryFrame._countTextOverlay:CreateFontString(nil, "OVERLAY")
                 secondaryFrame._countText:SetTextColor(1, 1, 1, 0.9)
             end
             -- Keep overlay level current in case frame levels shifted
             if secondaryFrame._countTextOverlay then
-                secondaryFrame._countTextOverlay:SetFrameLevel(secondaryFrame:GetFrameLevel() + 10)
+                secondaryFrame._countTextOverlay:SetFrameLevel(25)
             end
             secondaryFrame._countText:ClearAllPoints()
             secondaryFrame._countText:SetParent(secondaryFrame._countTextOverlay)
@@ -1958,7 +1990,7 @@ local function BuildBars()
         if not EllesmereUI.IsUnlockAnchored("ERB_ClassResource") then
             if sp.unlockPos and sp.unlockPos.point then
                 local rp = sp.unlockPos.relPoint or sp.unlockPos.point
-                local sx, sy = SnapXY(sp.unlockPos.x, sp.unlockPos.y, secondaryFrame)
+                local sx, sy = SnapXY(sp.unlockPos.x, sp.unlockPos.y, secondaryFrame, sp.unlockPos)
                 secondaryFrame:ClearAllPoints()
                 secondaryFrame:SetPoint(sp.unlockPos.point, UIParent, rp, sx, sy)
             elseif not secondaryFrame:GetLeft() then
@@ -2038,7 +2070,7 @@ local function UpdateHealthBar()
     if hp.textFormat ~= "none" then
         local fmt = hp.textFormat
         local pctStr = format("%d", pctRaw)
-        local curStr = AbbreviateLargeNumbers(cur)
+        local curStr = AbbreviateNumbers(cur)
         local txt
         if fmt == "both" then
             txt = curStr .. " | " .. pctStr .. "%"
@@ -2131,15 +2163,15 @@ local function UpdatePrimaryBar()
         local txt
         if fmt == "smart" then
             local isPercent = EllesmereUI.IsSmartPowerPercent and EllesmereUI.IsSmartPowerPercent()
-            txt = isPercent and percentText or AbbreviateLargeNumbers(cur)
+            txt = isPercent and percentText or AbbreviateNumbers(cur)
         elseif fmt == "both" then
-            txt = AbbreviateLargeNumbers(cur) .. " | " .. percentText
+            txt = AbbreviateNumbers(cur) .. " | " .. percentText
         elseif fmt == "curpp" then
-            txt = AbbreviateLargeNumbers(cur)
+            txt = AbbreviateNumbers(cur)
         elseif fmt == "perpp" then
             txt = percentText
         else
-            txt = AbbreviateLargeNumbers(cur)
+            txt = AbbreviateNumbers(cur)
         end
         primaryBar._text:SetText(txt)
         primaryBar._text:Show()
@@ -2557,14 +2589,18 @@ local function UpdateSecondaryResource()
         local useThresh = sp.thresholdEnabled and cur >= sp.thresholdCount
         local tr, tg, tb = sp.thresholdR, sp.thresholdG, sp.thresholdB
 
-        -- Fractional resource detection (e.g. Destro warlock soul shards)
+        -- Fractional resource detection (Destruction warlock only, specID 267)
         local frac = 0
         local preciseCur = cur
         if powerType == PT.SOUL_SHARDS then
-            local raw = UnitPower("player", powerType, true)
-            if raw and (not issecretvalue or not issecretvalue(raw)) then
-                preciseCur = raw / 10
-                frac = preciseCur - cur
+            local specIdx = GetSpecialization()
+            local specID = specIdx and C_SpecializationInfo and C_SpecializationInfo.GetSpecializationInfo(specIdx)
+            if specID == 267 then
+                local raw = UnitPower("player", powerType, true)
+                if raw and (not issecretvalue or not issecretvalue(raw)) then
+                    preciseCur = raw / 10
+                    frac = preciseCur - cur
+                end
             end
         end
 
@@ -3036,10 +3072,10 @@ BuildCastBar = function()
         castBarFrame._iconFrame = iconFrame
         castBarFrame._icon = icon
 
-        -- Text overlay frame (above border)
+        -- Text overlay frame (above all bar borders)
         local textFrame = CreateFrame("Frame", nil, castBarFrame)
         textFrame:SetAllPoints(bar)
-        textFrame:SetFrameLevel(bdrFrame:GetFrameLevel() + 1)
+        textFrame:SetFrameLevel(25)
         castBarFrame._textFrame = textFrame
 
         -- Spell name text
@@ -4007,13 +4043,6 @@ end
 -------------------------------------------------------------------------------
 function ERB:OnInitialize()
     self.db = EllesmereUI.Lite.NewDB("EllesmereUIResourceBarsDB", DEFAULTS, true)
-
-    -- Round width/height to whole pixels (one-time migration)
-    local p = self.db.profile
-    local sizeKeys = { "width", "height", "pipWidth", "pipHeight" }
-    if p and EllesmereUI.RoundSizeFields then
-        EllesmereUI.RoundSizeFields(sizeKeys, { p.primary, p.secondary, p.health, p.castBar })
-    end
 
     _G._ERB_AceDB = self.db
     _G._ERB_Apply = function() ERB:ApplyAll() end

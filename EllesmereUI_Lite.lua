@@ -200,11 +200,12 @@ function EUILite.NewDB(svName, defaults, defaultToCharKey)
     end
     local profile = profileData.addons[folder]
 
-    -- If a beta-exit wipe just happened this session, nuke the child SV
-    -- global so old data on disk cannot be re-imported. The global is
-    -- vestigial (all data lives in EllesmereUIDB); writing {} ensures
-    -- WoW saves a clean file at logout.
-    if EllesmereUI and EllesmereUI._showResetPopup then
+    -- Child SV globals are vestigial (all data lives in EllesmereUIDB).
+    -- Wipe in-place (not replace) so WoW's SV serializer, which holds
+    -- the original table reference from load time, saves the empty table.
+    if _G[svName] and type(_G[svName]) == "table" then
+        wipe(_G[svName])
+    else
         _G[svName] = {}
     end
 

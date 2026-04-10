@@ -16,6 +16,7 @@ local C_UnitAuras_GetAuraDuration = C_UnitAuras and C_UnitAuras.GetAuraDuration
 local UnitName, UnitGUID = UnitName, UnitGUID
 local UnitIsUnit, UnitCanAttack = UnitIsUnit, UnitCanAttack
 local UnitIsEnemy, UnitIsTapDenied = UnitIsEnemy, UnitIsTapDenied
+
 local UnitAffectingCombat, UnitClassification = UnitAffectingCombat, UnitClassification
 local UnitIsDeadOrGhost, UnitReaction = UnitIsDeadOrGhost, UnitReaction
 local UnitIsPlayer, UnitClass = UnitIsPlayer, UnitClass
@@ -155,6 +156,7 @@ local defaults = {
     classificationSlot = "topleft",
     rareEliteIconSize = 20,
     castBarHeight = 17,
+    castOverlayEnabled = false,
     castNameSize = 10,
     castNameColor = { r = 1, g = 1, b = 1 },
     castTargetSize = 10,
@@ -485,9 +487,11 @@ local function GetShowCastIcon()
     if p and p.showCastIcon ~= nil then return p.showCastIcon end
     return defaults.showCastIcon
 end
+ns.GetShowCastIcon = GetShowCastIcon
 local function GetCastIconScale()
     return (p and p.castIconScale) or defaults.castIconScale
 end
+ns.GetCastIconScale = GetCastIconScale
 local function GetKickTickEnabled()
     if p and p.kickTickEnabled ~= nil then return p.kickTickEnabled end
     return true
@@ -1288,6 +1292,17 @@ local frameCache = CreateFramePool("Frame", UIParent, nil, nil, false, function(
     plate.absorb:SetWidth(GetHealthBarWidth())
     plate.absorb:SetHeight(GetHealthBarHeight())
     plate.absorb:SetFrameLevel(plate.health:GetFrameLevel())
+    plate.absorbForward = CreateFrame("StatusBar", nil, plate.absorbClip)
+    plate.absorbForward:SetStatusBarTexture("Interface\\AddOns\\EllesmereUINameplates\\Media\\absorb-default.png")
+    plate.absorbForward:GetStatusBarTexture():SetDrawLayer("ARTWORK", 1)
+    plate.absorbForward:SetStatusBarColor(1, 1, 1, 0.8)
+    plate.absorbForward:SetReverseFill(false)
+    plate.absorbForward:SetPoint("TOPLEFT", plate.health:GetStatusBarTexture(), "TOPRIGHT", 0, 0)
+    plate.absorbForward:SetPoint("BOTTOMLEFT", plate.health:GetStatusBarTexture(), "BOTTOMRIGHT", 0, 0)
+    plate.absorbForward:SetWidth(GetHealthBarWidth())
+    plate.absorbForward:SetHeight(GetHealthBarHeight())
+    plate.absorbForward:SetFrameLevel(plate.health:GetFrameLevel())
+    plate.absorbForward:Hide()
     plate.absorbOverflow = CreateFrame("StatusBar", nil, plate.health)
     plate.absorbOverflow:SetStatusBarTexture("Interface\\AddOns\\EllesmereUINameplates\\Media\\absorb-default.png")
     plate.absorbOverflow:GetStatusBarTexture():SetDrawLayer("ARTWORK", 1)
@@ -1496,6 +1511,8 @@ local frameCache = CreateFramePool("Frame", UIParent, nil, nil, false, function(
     plate.kickTick:SetPoint("TOP", plate.kickMarker, "TOP", 0, 0)
     plate.kickTick:SetPoint("BOTTOM", plate.kickMarker, "BOTTOM", 0, 0)
     plate.kickTick:SetPoint("LEFT", plate.kickMarker:GetStatusBarTexture(), "RIGHT")
+    -- Cast bar text: three independent fixed zones
+    -- [castName LEFT 50%] [castTarget CENTER-RIGHT 25%] [castTimer RIGHT 15%]
     plate.castName = plate.cast:CreateFontString(nil, "OVERLAY")
     SetFSFont(plate.castName, 10, GetNPOutline())
     plate.castName:SetPoint("LEFT", plate.cast, "LEFT", 5, 0)
@@ -1506,9 +1523,8 @@ local frameCache = CreateFramePool("Frame", UIParent, nil, nil, false, function(
     SetFSFont(plate.castTarget, 10, GetNPOutline())
     plate.castTarget:SetJustifyH("RIGHT")
     plate.castTarget:SetWordWrap(false)
+    plate.castTarget:SetNonSpaceWrap(false)
     plate.castTarget:SetMaxLines(1)
-    -- Cast timer text: remaining/elapsed seconds, anchored to the far right.
-    -- castTarget is repositioned to sit immediately left of it.
     plate.castTimer = plate.cast:CreateFontString(nil, "OVERLAY")
     SetFSFont(plate.castTimer, 10, GetNPOutline())
     plate.castTimer:SetPoint("RIGHT", plate.cast, "RIGHT", -3, 0)
@@ -1516,8 +1532,6 @@ local frameCache = CreateFramePool("Frame", UIParent, nil, nil, false, function(
     plate.castTimer:SetWordWrap(false)
     plate.castTimer:SetMaxLines(1)
     plate.castTimer:SetTextColor(1, 1, 1, 1)
-    -- castTarget sits left of castTimer with a small gap
-    plate.castTarget:SetPoint("RIGHT", plate.castTimer, "LEFT", -4, 0)
     -- OnUpdate: tick the cast timer every frame while a cast is active.
     -- Uses UnitCastingDuration/UnitChannelDuration duration objects and their
     -- :GetRemainingDuration() method to avoid taint from UnitCastingInfo's
@@ -1528,6 +1542,7 @@ local frameCache = CreateFramePool("Frame", UIParent, nil, nil, false, function(
         if not owner._showCastTimer then return end
         if UnitCastingDuration then
             local durObj = UnitCastingDuration(owner.unit)
+                or (UnitEmpoweredChannelDuration and UnitEmpoweredChannelDuration(owner.unit, true))
                 or (UnitChannelDuration and UnitChannelDuration(owner.unit))
             if durObj then
                 local remaining = durObj:GetRemainingDuration()
@@ -1714,6 +1729,10 @@ local function ComputeCastBarTint(readyTint, baseTint)
     local bVal = C_CurveUtil.EvaluateColorValueFromBoolean(offCooldown, baseTint.b, readyTint.b)
     return rVal, gVal, bVal
 end
+-- Exposed for the cast overlay file (EllesmereUINameplates_CastOverlay.lua)
+-- so the overlay bar can apply the same interrupt-ready tint as the on-plate
+-- cast bar without duplicating the logic.
+ns.ComputeCastBarTint = ComputeCastBarTint
 function ns.RefreshBorderStyle()
     for _, plate in pairs(ns.plates) do
         if plate.ApplyBorderStyle then
@@ -1887,14 +1906,23 @@ local function SetupAuraCVars()
         local nameOnly = (db.friendlyNameOnly ~= false)
         local showPlayers = (db.showFriendlyPlayers ~= false)
         local showNPCs = (db.showFriendlyNPCs == true)
-        SetCVar("nameplateShowOnlyNameForFriendlyPlayerUnits", nameOnly and 1 or 0)
-        SetCVar("nameplateShowFriendlyPlayers", showPlayers and 1 or 0)
-        SetCVar("UnitNameFriendlyPlayerName", showPlayers and 1 or 0)
-        SetCVar("nameplateShowFriends", showPlayers and 1 or 0)
+        -- Friendly player CVars are only written when EUI is managing
+        -- friendly player nameplates. When the user disables the "Show EUI
+        -- Friendly Player Nameplates" toggle we relinquish control fully
+        -- and leave these CVars alone so Blizzard's own Nameplate settings
+        -- own them. Friendly NPC and enemy pet CVars are always managed.
+        if showPlayers then
+            SetCVar("nameplateShowOnlyNameForFriendlyPlayerUnits", nameOnly and 1 or 0)
+            SetCVar("nameplateShowFriendlyPlayers", 1)
+            SetCVar("UnitNameFriendlyPlayerName", 1)
+            SetCVar("nameplateShowFriends", 1)
+        end
         SetCVar("nameplateShowFriendlyNPCs", showNPCs and 1 or 0)
         SetCVar("nameplateShowFriendlyNpcs", showNPCs and 1 or 0)
         SetCVar("nameplateShowEnemyPets", (db.showEnemyPets == true) and 1 or 0)
-        SetCVar("ShowClassColorInFriendlyNameplate", (db.classColorFriendly ~= false) and 1 or 0)
+        if showPlayers then
+            SetCVar("ShowClassColorInFriendlyNameplate", (db.classColorFriendly ~= false) and 1 or 0)
+        end
         SetCVar("ShowClassColorInNameplate", 1)
         SetCVar("nameplateSize", 3)
         SetCVar("nameplateShowAll", 1)
@@ -1909,7 +1937,9 @@ local function SetupAuraCVars()
         SetCVar("nameplateMaxScale", 1)
         SetCVar("nameplateTargetBehindMaxDistance", 30)
         SetCVar("clampTargetNameplateToScreen", 1)
-        SetCVar("nameplateUseClassColorForFriendlyPlayerUnitNames", (db.classColorFriendly ~= false) and 1 or 0)
+        if showPlayers then
+            SetCVar("nameplateUseClassColorForFriendlyPlayerUnitNames", (db.classColorFriendly ~= false) and 1 or 0)
+        end
     end
     -- Hide realm names on friendly nameplates inside instances
     if NamePlateFriendlyFrameOptions and TextureLoadingGroupMixin then
@@ -3076,18 +3106,23 @@ function NameplateFrame:SetUnit(unit, nameplate)
     SetFSFont(self.castName, cns, GetNPOutline())
     SetFSFont(self.castTarget, cts, GetNPOutline())
     SetFSFont(self.castTimer, ctmSz, GetNPOutline())
+    -- Reapply justify after SetFont (SetFont can reset it)
+    self.castName:SetJustifyH("LEFT")
+    self.castTarget:SetJustifyH("RIGHT")
+    self.castTimer:SetJustifyH("RIGHT")
     self.castTimer:SetTextColor(ctmC.r, ctmC.g, ctmC.b, 1)
     local showTimer = defaults.showCastTimer
     if p and p.showCastTimer ~= nil then showTimer = p.showCastTimer end
     self._showCastTimer = showTimer
-    if showTimer then
-        self.castTimer:Show()
+    -- Fixed widths for three independent zones
+    local castW = self.cast:GetWidth()
+    local timerW = ctmSz * 2.2
+    if castW and castW > 0 then
+        self.castName:SetWidth(castW * 0.42)
+        self.castTimer:SetWidth(timerW)
+        self.castTarget:SetWidth(castW * 0.42)
         self.castTarget:ClearAllPoints()
-        self.castTarget:SetPoint("RIGHT", self.castTimer, "LEFT", -4, 0)
-    else
-        self.castTimer:Hide()
-        self.castTarget:ClearAllPoints()
-        self.castTarget:SetPoint("RIGHT", self.cast, "RIGHT", -3, 0)
+        self.castTarget:SetPoint("RIGHT", self.cast, "RIGHT", -3 - timerW, 0)
     end
     self.castName:SetTextColor(cnc.r, cnc.g, cnc.b, 1)
     -- Cast target color: class-colored if enabled and target is a player, otherwise use castTargetColor
@@ -3207,6 +3242,9 @@ function NameplateFrame:SetUnit(unit, nameplate)
         end
     end
     PositionAuraSlot(self.cc, 2, ccSlot, self, ccSz, ccSz, gap, GetAuraSlotOffsets("ccSlot"))
+if self.absorbForward then
+    self.absorbForward:SetHeight(GetHealthBarHeight())
+end
 if self.absorbOverflow then
     self.absorbOverflow:SetHeight(GetHealthBarHeight())
 end
@@ -3227,8 +3265,12 @@ end
     self:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_START", unit)
     self:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_UPDATE", unit)
     self:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_STOP", unit)
+    self:RegisterUnitEvent("UNIT_SPELLCAST_EMPOWER_START", unit)
+    self:RegisterUnitEvent("UNIT_SPELLCAST_EMPOWER_UPDATE", unit)
+    self:RegisterUnitEvent("UNIT_SPELLCAST_EMPOWER_STOP", unit)
     self:RegisterUnitEvent("UNIT_SPELLCAST_INTERRUPTIBLE", unit)
     self:RegisterUnitEvent("UNIT_SPELLCAST_NOT_INTERRUPTIBLE", unit)
+    ApplyHealthBarTexture(self)
     self:UpdateHealth()
     self:UpdateName()
     self:UpdateClassification()
@@ -3237,11 +3279,10 @@ end
     self:ApplyMouseover()
     self:UpdateAuras()
     self:UpdateCast()
-    ApplyHealthBarTexture(self)
 end
 function NameplateFrame:ClearUnit()
     self:UnregisterAllEvents()
-    
+
     if self.isCasting then
         self.isCasting = false
         if self._castFallback then
@@ -3252,6 +3293,8 @@ function NameplateFrame:ClearUnit()
         end
         NotifyCastEnded()
     end
+    -- Release elevated cast overlay (plate going away)
+    if ns.RefreshCastOverlay then ns.RefreshCastOverlay(self) end
     
     self.name:SetText("")
     for i = 1, 2 do
@@ -3309,13 +3352,16 @@ function NameplateFrame:ClearUnit()
     if self.rightArrow then self.rightArrow:Hide() end
     HideClassPowerOnPlate(self)
     self.absorb:Hide()
+    if self.absorbForward then
+        self.absorbForward:Hide()
+    end
     if self.absorbOverflow then
-    self.absorbOverflow:Hide()
-    self.absorbOverflow:SetWidth(0)
-end
-if self.absorbOverflowDivider then
-    self.absorbOverflowDivider:Hide()
-end
+        self.absorbOverflow:Hide()
+        self.absorbOverflow:SetWidth(0)
+    end
+    if self.absorbOverflowDivider then
+        self.absorbOverflowDivider:Hide()
+    end
     self:Hide()
     self:SetScale(1)
     self:SetParent(UIParent)
@@ -3339,25 +3385,139 @@ function NameplateFrame:UpdateHealthValues()
             self:UpdateName()
         end
     end
-    if false and self.hpCalculator and self.hpCalculator.GetMaximumHealth then
-        -- NOTE: Disabled because hpCalculator methods now return secret/protected values
-        -- on the beta, which cannot be passed to StatusBar:SetValue().
+
+    local curHealth, maxHealth, absorbAmt, maxWithAbsorbs
+
+    if self.hpCalculator and self.hpCalculator.GetMaximumHealth and UnitGetDetailedHealPrediction then
         UnitGetDetailedHealPrediction(unit, nil, self.hpCalculator)
-        self.hpCalculator:SetMaximumHealthMode(Enum.UnitMaximumHealthMode.WithAbsorbs)
-        local maxWithAbsorbs = self.hpCalculator:GetMaximumHealth()
-        self.health:SetMinMaxValues(0, maxWithAbsorbs)
-        self.absorb:SetMinMaxValues(0, maxWithAbsorbs)
-        self.absorb:SetValue(self.hpCalculator:GetDamageAbsorbs())
-        self.absorb:Show()
+
         self.hpCalculator:SetMaximumHealthMode(Enum.UnitMaximumHealthMode.Default)
-        self.health:SetValue(self.hpCalculator:GetCurrentHealth())
+        curHealth = self.hpCalculator:GetCurrentHealth()
+        maxHealth = self.hpCalculator:GetMaximumHealth()
+        absorbAmt = self.hpCalculator:GetDamageAbsorbs()
+
+        self.hpCalculator:SetMaximumHealthMode(Enum.UnitMaximumHealthMode.WithAbsorbs)
+        maxWithAbsorbs = self.hpCalculator:GetMaximumHealth()
+        self.hpCalculator:SetMaximumHealthMode(Enum.UnitMaximumHealthMode.Default)
     else
-        local maxHealth = UnitHealthMax(unit)
-        self.health:SetMinMaxValues(0, maxHealth)
-        self.health:SetValue(UnitHealth(unit))
-        self.absorb:SetMinMaxValues(0, maxHealth)
-        self.absorb:SetValue(UnitGetTotalAbsorbs(unit))
+        curHealth = UnitHealth(unit)
+        maxHealth = UnitHealthMax(unit)
+        absorbAmt = UnitGetTotalAbsorbs and UnitGetTotalAbsorbs(unit) or 0
+        maxWithAbsorbs = maxHealth
+    end
+
+    local absorbIsSecret = issecretvalue and issecretvalue(absorbAmt)
+
+    self.absorb:ClearAllPoints()
+    self.absorb:SetWidth(self.health:GetWidth())
+    self.absorb:SetHeight(self.health:GetHeight())
+
+    if self.absorbForward then
+        self.absorbForward:ClearAllPoints()
+        self.absorbForward:SetWidth(self.health:GetWidth())
+        self.absorbForward:SetHeight(self.health:GetHeight())
+    end
+
+    if absorbIsSecret then
+        -- Secret-value absorbs (enemy players / Midnight units) cannot be split
+        -- safely in Lua. Instead, keep the health bar scaled to include absorbs,
+        -- then render a single forward absorb segment in the newly-created gap.
+        self.health:SetMinMaxValues(0, maxWithAbsorbs or maxHealth)
+        self.health:SetValue(curHealth)
+
+        self.absorb:SetMinMaxValues(0, maxWithAbsorbs or maxHealth)
+        self.absorb:SetReverseFill(false)
+        self.absorb:SetPoint("TOPLEFT", self.health:GetStatusBarTexture(), "TOPRIGHT", 0, 0)
+        self.absorb:SetPoint("BOTTOMLEFT", self.health:GetStatusBarTexture(), "BOTTOMRIGHT", 0, 0)
+        self.absorb:SetValue(absorbAmt)
         self.absorb:Show()
+
+        if self.absorbForward then
+            self.absorbForward:Hide()
+        end
+        if self.absorbOverflow then
+            self.absorbOverflow:Hide()
+            self.absorbOverflow:SetWidth(0)
+        end
+        if self.absorbOverflowDivider then
+            self.absorbOverflowDivider:Hide()
+        end
+    else
+        self.health:SetMinMaxValues(0, maxHealth)
+        self.health:SetValue(curHealth)
+
+        self.absorb:SetMinMaxValues(0, maxHealth)
+        if self.absorbForward then
+            self.absorbForward:SetMinMaxValues(0, maxHealth)
+        end
+
+        local absorbValue = absorbAmt or 0
+        if absorbValue <= 0 then
+            self.absorb:Hide()
+            if self.absorbForward then
+                self.absorbForward:Hide()
+            end
+            if self.absorbOverflow then
+                self.absorbOverflow:Hide()
+                self.absorbOverflow:SetWidth(0)
+            end
+            if self.absorbOverflowDivider then
+                self.absorbOverflowDivider:Hide()
+            end
+        else
+            local missing = maxHealth - curHealth
+            if missing < 0 then missing = 0 end
+
+            local forwardAbsorb = math.min(absorbValue, missing)
+            local remainingAbsorb = absorbValue - forwardAbsorb
+            if remainingAbsorb < 0 then remainingAbsorb = 0 end
+
+            local backfillAbsorb = math.min(remainingAbsorb, curHealth or 0)
+            local overflowAbsorb = remainingAbsorb - backfillAbsorb
+            if overflowAbsorb < 0 then overflowAbsorb = 0 end
+
+            if self.absorbForward then
+                self.absorbForward:SetReverseFill(false)
+                self.absorbForward:SetPoint("TOPLEFT", self.health:GetStatusBarTexture(), "TOPRIGHT", 0, 0)
+                self.absorbForward:SetPoint("BOTTOMLEFT", self.health:GetStatusBarTexture(), "BOTTOMRIGHT", 0, 0)
+                self.absorbForward:SetValue(forwardAbsorb)
+                if forwardAbsorb > 0 then
+                    self.absorbForward:Show()
+                else
+                    self.absorbForward:Hide()
+                end
+            end
+
+            self.absorb:SetReverseFill(true)
+            self.absorb:SetPoint("TOPRIGHT", self.health:GetStatusBarTexture(), "TOPRIGHT", 0, 0)
+            self.absorb:SetPoint("BOTTOMRIGHT", self.health:GetStatusBarTexture(), "BOTTOMRIGHT", 0, 0)
+            self.absorb:SetValue(backfillAbsorb)
+            if backfillAbsorb > 0 then
+                self.absorb:Show()
+            else
+                self.absorb:Hide()
+            end
+
+            if self.absorbOverflow then
+                self.absorbOverflow:SetMinMaxValues(0, maxHealth)
+                self.absorbOverflow:SetValue(overflowAbsorb)
+                if overflowAbsorb > 0 then
+                    self.absorbOverflow:Show()
+                    self.absorbOverflow:SetWidth(self.health:GetWidth())
+                    if self.absorbOverflowDivider then
+                        self.absorbOverflowDivider:Show()
+                    end
+                else
+                    self.absorbOverflow:Hide()
+                    self.absorbOverflow:SetWidth(0)
+                    if self.absorbOverflowDivider then
+                        self.absorbOverflowDivider:Hide()
+                    end
+                end
+            elseif self.absorbOverflowDivider then
+                self.absorbOverflowDivider:Hide()
+            end
+        end
     end
 
     -- Hash line positioning (target only)
@@ -3387,7 +3547,7 @@ function NameplateFrame:UpdateHealthValues()
         local pctVal = UnitHealthPercent(unit, true, CurveConstants.ScaleTo100)
         pctText = string.format("%d%%", pctVal)
         pctNoSignText = string.format("%d", pctVal)
-        numText = AbbreviateLargeNumbers(UnitHealth(unit))
+        numText = AbbreviateNumbers(UnitHealth(unit))
     else
         pctText = ""
         pctNoSignText = ""
@@ -4081,6 +4241,11 @@ function NameplateFrame:UpdateCast()
     end
     local name, _, texture, _, _, _, _, kickProtected, castSpellID = UnitCastingInfo(self.unit)
     local isChannel = false
+    local isEmpowered = false
+    -- type(name) == "nil" is the taint-safe pattern for secret strings:
+    -- type() returns a plain string ("string" / "nil"), so comparing that
+    -- to "nil" never touches the secret value itself. Direct equality on
+    -- the secret string ("" or another string literal) taints.
     if type(name) == "nil" then
         name, _, texture, _, _, _, kickProtected, castSpellID = UnitChannelInfo(self.unit)
         isChannel = true
@@ -4107,6 +4272,8 @@ function NameplateFrame:UpdateCast()
         if GetShowClassPower() and classPowerType and self._cpPips and self.unit and UnitIsUnit(self.unit, "target") then
             UpdateClassPowerOnPlate(self)
         end
+        -- Release elevated cast overlay (cast ended)
+        if ns.RefreshCastOverlay then ns.RefreshCastOverlay(self) end
         return
     end
 
@@ -4124,20 +4291,17 @@ function NameplateFrame:UpdateCast()
     end
     self.castName:SetText(type(name) ~= "nil" and name or "")
     
-    -- Use the dedicated spell target APIs when available. These return
-    -- who the SPELL is aimed at (locked at cast start), not the mob's
-    -- current aggro target which can change mid-cast.
-    -- UnitSpellTargetName returns a secret string but SetText accepts it.
+    -- Get the cast target name and class for display (Midnight APIs).
+    -- UnitSpellTargetName returns a unit token or full name-realm;
+    -- pass through UnitName() to get a clean short name (no realm).
     local spellTarget, spellTargetClass
-    if UnitSpellTargetName and UnitShouldDisplaySpellTargetName
-        and UnitShouldDisplaySpellTargetName(self.unit) then
-        spellTarget = UnitSpellTargetName(self.unit)
+    local rawTarget = UnitSpellTargetName and UnitSpellTargetName(self.unit)
+    if rawTarget then
+        local shortName = UnitName(rawTarget)
+        spellTarget = shortName or rawTarget
         spellTargetClass = UnitSpellTargetClass and UnitSpellTargetClass(self.unit)
-    else
-        local targetUnit = self.unit .. "target"
-        spellTarget = UnitName(targetUnit)
-        spellTargetClass = UnitClassBase(targetUnit)
     end
+    local hasTarget = spellTarget and true or false
     self.castTarget:SetText(spellTarget or "")
 
     -- Apply class color to cast target text if enabled and target is a player
@@ -4161,12 +4325,9 @@ function NameplateFrame:UpdateCast()
         self.castTarget:SetTextColor(ctc.r, ctc.g, ctc.b, 1)
     end
 
-    -- Two-point anchor: castName stretches from LEFT+5 to 5px before castTarget's left edge
-    -- This avoids GetStringWidth() which returns tainted secret values on nameplates
-    self.castName:SetWidth(0)  -- clear any fixed width
-    self.castName:ClearAllPoints()
-    self.castName:SetPoint("LEFT", self.cast, "LEFT", 5, 0)
-    self.castName:SetPoint("RIGHT", self.castTarget, "LEFT", -5, 0)
+    -- All three zones are independent: show/hide based on their own conditions
+    self.castTarget:SetShown(hasTarget)
+    self.castTimer:SetShown(self._showCastTimer)
 
     if type(kickProtected) == "nil" then
         kickProtected = false
@@ -4180,10 +4341,27 @@ function NameplateFrame:UpdateCast()
     
     if UnitCastingDuration and self.cast.SetTimerDuration then
         if isChannel then
-            local castDuration = UnitChannelDuration(self.unit)
+            local castDuration
+            -- Try empowered channel duration first (Evoker empower spells
+            -- like Fire Breath, Eternity Surge, Dream Breath, Spiritbloom).
+            -- Normal UnitChannelDuration can return nil during the empower
+            -- phase, which would leave the bar unticked even though
+            -- UnitChannelInfo did return a spell name.
+            if UnitEmpoweredChannelDuration then
+                castDuration = UnitEmpoweredChannelDuration(self.unit, true)
+                if castDuration then isEmpowered = true end
+            end
+            if not castDuration then
+                castDuration = UnitChannelDuration(self.unit)
+            end
             if castDuration then
                 self.cast:SetReverseFill(false)
-                self.cast:SetTimerDuration(castDuration, nil, Enum.StatusBarTimerDirection.RemainingTime)
+                -- Empowered channels fill forward (elapsed time / stages);
+                -- normal channels fill backward (remaining time).
+                local direction = isEmpowered
+                    and Enum.StatusBarTimerDirection.ElapsedTime
+                    or Enum.StatusBarTimerDirection.RemainingTime
+                self.cast:SetTimerDuration(castDuration, nil, direction)
                 if not self.isCasting then NotifyCastStarted() end
                 self.isCasting = true
             end
@@ -4207,13 +4385,15 @@ function NameplateFrame:UpdateCast()
         end
     end
     self:ApplyScale()
-    self:UpdateKickTick(kickProtected, isChannel)
+    self:UpdateKickTick(kickProtected, isChannel, isEmpowered)
     -- Important cast glow
     self:UpdateImportantCastGlow(castSpellID)
     -- Reposition class power pips (cast bar now visible, pips move below it)
     if GetShowClassPower() and classPowerType and self._cpPips and self.unit and UnitIsUnit(self.unit, "target") then
         UpdateClassPowerOnPlate(self)
     end
+    -- Refresh elevated cast overlay (acquires/releases as needed)
+    if ns.RefreshCastOverlay then ns.RefreshCastOverlay(self) end
 end
 function NameplateFrame:ApplyScale()
     local base = 1
@@ -4242,6 +4422,12 @@ function NameplateFrame:ApplyCastColor(uninterruptible)
         self.castBarOverlay:SetAlpha(a)
         self.castShieldFrame:SetAlpha(a)
     end
+    -- Propagate to the elevated cast overlay (if active for this plate) so
+    -- the overlay's bar color tracks kick-ready / uninterruptible state the
+    -- same way the on-plate cast bar does.
+    if ns.RefreshCastOverlayColor then
+        ns.RefreshCastOverlayColor(self, uninterruptible)
+    end
 end
 function NameplateFrame:HideKickTick()
     self.kickPositioner:Hide()
@@ -4251,7 +4437,7 @@ function NameplateFrame:HideKickTick()
         self._kickTicker = nil
     end
 end
-function NameplateFrame:UpdateKickTick(kickProtected, isChannel)
+function NameplateFrame:UpdateKickTick(kickProtected, isChannel, isEmpowered)
     if not GetKickTickEnabled() or not activeKickSpell then
         self:HideKickTick()
         return
@@ -4265,7 +4451,17 @@ function NameplateFrame:UpdateKickTick(kickProtected, isChannel)
     end
     -- Midnight path: use secret duration objects
     if UnitCastingDuration and self.cast.SetTimerDuration then
-        local castDuration = isChannel and UnitChannelDuration(self.unit) or UnitCastingDuration(self.unit)
+        local castDuration
+        if isChannel then
+            if isEmpowered and UnitEmpoweredChannelDuration then
+                castDuration = UnitEmpoweredChannelDuration(self.unit, true)
+            end
+            if not castDuration then
+                castDuration = UnitChannelDuration(self.unit)
+            end
+        else
+            castDuration = UnitCastingDuration(self.unit)
+        end
         if not castDuration then
             self:HideKickTick()
             return
@@ -4291,8 +4487,9 @@ function NameplateFrame:UpdateKickTick(kickProtected, isChannel)
         -- Apply color
         local kr, kg, kb = GetKickTickColor()
         self.kickTick:SetColorTexture(kr, kg, kb, 1)
-        -- Handle channel vs cast fill direction
-        if isChannel then
+        -- Handle channel vs cast fill direction. Empowered channels fill
+        -- forward (like a normal cast), so treat them as non-channel here.
+        if isChannel and not isEmpowered then
             self.kickPositioner:SetFillStyle(Enum.StatusBarFillStyle.Reverse)
             self.kickMarker:SetFillStyle(Enum.StatusBarFillStyle.Reverse)
             self.kickMarker:ClearAllPoints()
@@ -4411,10 +4608,13 @@ function NameplateFrame:ShowInterrupted(interrupterGUID)
         self.castTarget:SetText("")
     end
 
-    self.castName:SetWidth(0)
-    self.castName:ClearAllPoints()
-    self.castName:SetPoint("LEFT", self.cast, "LEFT", 5, 0)
-    self.castName:SetPoint("RIGHT", self.castTarget, "LEFT", -5, 0)
+    -- Show interrupter name in target slot, hide timer
+    self.castTimer:Hide()
+    if interrupterName then
+        self.castTarget:Show()
+    else
+        self.castTarget:Hide()
+    end
     self.castShieldFrame:Hide()
     self.castShieldFrame:SetAlpha(1)
     self.castBarOverlay:SetAlpha(0)
@@ -4485,6 +4685,15 @@ function NameplateFrame:UNIT_SPELLCAST_INTERRUPTIBLE()
     self:UpdateCast()
 end
 function NameplateFrame:UNIT_SPELLCAST_NOT_INTERRUPTIBLE()
+    self:UpdateCast()
+end
+function NameplateFrame:UNIT_SPELLCAST_EMPOWER_START()
+    self:UpdateCast()
+end
+function NameplateFrame:UNIT_SPELLCAST_EMPOWER_UPDATE()
+    self:UpdateCast()
+end
+function NameplateFrame:UNIT_SPELLCAST_EMPOWER_STOP()
     self:UpdateCast()
 end
 local manager = CreateFrame("Frame")
