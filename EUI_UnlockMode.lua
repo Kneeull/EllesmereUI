@@ -125,11 +125,19 @@ if not EllesmereUI.ReapplyOwnAnchor then
         local centerX = cx - uiW / 2
         local centerY = cy - uiH / 2
 
-        -- Snap to physical pixel grid
+        -- Snap CENTER offset to a grid that keeps the child's edges on
+        -- whole pixels. SnapCenterForDim picks the integer or integer+0.5
+        -- grid based on the child's pixel-dimension parity. Plain SnapForES
+        -- would round 540.5 to 541 and force half-pixel edges (1px drift).
         local PPa = EllesmereUI.PP
-        if PPa and PPa.SnapForES then
-            centerX = PPa.SnapForES(centerX, cS)
-            centerY = PPa.SnapForES(centerY, cS)
+        if PPa then
+            if PPa.SnapCenterForDim then
+                centerX = PPa.SnapCenterForDim(centerX, cW, cS)
+                centerY = PPa.SnapCenterForDim(centerY, cH, cS)
+            elseif PPa.SnapForES then
+                centerX = PPa.SnapForES(centerX, cS)
+                centerY = PPa.SnapForES(centerY, cS)
+            end
         end
 
         pcall(function()
@@ -197,22 +205,25 @@ if not EllesmereUI.NotifyElementResized then
         local cx, cy = pos.x or 0, pos.y or 0
         local fw = frame:GetWidth() or 0
         local fh = frame:GetHeight() or 0
-        local halfW = math.floor(fw / 2)
-        local halfH = math.floor(fh / 2)
+        -- Use raw fw/2 and fh/2 (not floor) so odd-pixel-height/width frames
+        -- with integer + 0.5 center coords reverse exactly to integer pixel
+        -- edges. floor() loses the .5 and causes a 1px drift on save & exit.
         local anchor, adjX, adjY
         if growDir == "RIGHT" then
-            anchor = "LEFT"; adjX = cx - halfW; adjY = cy
+            anchor = "LEFT"; adjX = cx - fw / 2; adjY = cy
         elseif growDir == "LEFT" then
-            anchor = "RIGHT"; adjX = cx + (fw - halfW); adjY = cy
+            anchor = "RIGHT"; adjX = cx + fw / 2; adjY = cy
         elseif growDir == "DOWN" then
-            anchor = "TOP"; adjX = cx; adjY = cy + (fh - halfH)
+            anchor = "TOP"; adjX = cx; adjY = cy + fh / 2
         elseif growDir == "UP" then
-            anchor = "BOTTOM"; adjX = cx; adjY = cy - halfH
+            anchor = "BOTTOM"; adjX = cx; adjY = cy - fh / 2
         else
             return
         end
 
-        -- Snap to physical pixel grid
+        -- Snap to physical pixel grid. Edge anchor case (LEFT/RIGHT/TOP/BOTTOM
+        -- with raw fw/2 or fh/2): adjX/Y represents an EDGE offset that lands
+        -- on a whole pixel, so SnapForES (round-to-nearest) is correct.
         local PPa = EllesmereUI.PP
         if PPa and PPa.SnapForES then
             local es = frame:GetEffectiveScale()
@@ -238,7 +249,29 @@ if not EllesmereUI.IsUnlockAnchored then
     end
 end
 
-
+-- Early anchor reapply on login: the full ApplySavedPositions lives in the
+-- deferred block and only runs when EnsureLoaded() fires (options open, CDM
+-- init, etc.). Without this, anchored action bars never resolve their chain
+-- if the user doesn't open options and CDM is disabled.
+do
+    local f = CreateFrame("Frame")
+    f:RegisterEvent("PLAYER_ENTERING_WORLD")
+    f:SetScript("OnEvent", function(self)
+        self:UnregisterEvent("PLAYER_ENTERING_WORLD")
+        C_Timer.After(1.5, function()
+            -- If the deferred block already ran, it handles everything
+            if EllesmereUI._applySavedPositions then return end
+            -- Otherwise, use the lightweight stub to reapply all anchors
+            local adb = EllesmereUIDB and EllesmereUIDB.unlockAnchors
+            if not adb then return end
+            for childKey, info in pairs(adb) do
+                if info.target and EllesmereUI.ReapplyOwnAnchor then
+                    EllesmereUI.ReapplyOwnAnchor(childKey)
+                end
+            end
+        end)
+    end)
+end
 
 -- DEFERRED: heavy body (4900+ lines) runs on first EnsureLoaded() call.
 EllesmereUI._deferredInits[#EllesmereUI._deferredInits + 1] = function()
@@ -1121,8 +1154,10 @@ function EllesmereUI.NotifyElementResized(key)
     -- Skip if we're inside a width/height match propagation to avoid loops:
     -- setWidth/setHeight -> rebuild -> OnSizeChanged -> NotifyElementResized
     if _propagatingMatch then return end
-    -- Skip position re-application if LayoutBar is handling it
-    if EllesmereUI._layoutBarResizing == key then return end
+    -- When LayoutBar is handling positioning (custom grow directions), skip
+    -- only the position re-application below but still run width/height match
+    -- propagation and anchor chains.
+    local layoutBarHandled = (EllesmereUI._layoutBarResizing == key)
     -- Suppress during spec swap / zone transitions. CDM bar icon counts
     -- fluctuate as Blizzard recycles viewer frames, causing transient size
     -- changes that propagate wrong widths to matched elements.
@@ -1149,24 +1184,28 @@ function EllesmereUI.NotifyElementResized(key)
     -- its position may need adjusting after its own size changed).
     -- For unanchored elements, re-apply the stored CENTER position so the
     -- WoW anchor stays CENTER after addon rebuilds that may use TOPLEFT.
-    local anchorDB = GetAnchorDB()
-    local ownAnchor = anchorDB and anchorDB[key]
-    if ownAnchor and ownAnchor.target then
-        if EllesmereUI.ReapplyOwnAnchor then
-            EllesmereUI.ReapplyOwnAnchor(key)
-        end
-    else
-        -- Unanchored: re-apply stored CENTER position
-        local elem = registeredElements[key]
-        local pos
-        if elem and elem.loadPosition then
-            pos = elem.loadPosition(key)
+    -- Skip when LayoutBar already positioned the bar from its captured edge
+    -- to avoid CENTER->edge->CENTER round-trip drift.
+    if not layoutBarHandled then
+        local anchorDB = GetAnchorDB()
+        local ownAnchor = anchorDB and anchorDB[key]
+        if ownAnchor and ownAnchor.target then
+            if EllesmereUI.ReapplyOwnAnchor then
+                EllesmereUI.ReapplyOwnAnchor(key)
+            end
         else
-            local db = GetPositionDB()
-            pos = db and db[key]
-        end
-        if pos and pos.point == "CENTER" and pos.relPoint == "CENTER" then
-            ApplyCenterPosition(key, pos)
+            -- Unanchored: re-apply stored CENTER position
+            local elem = registeredElements[key]
+            local pos
+            if elem and elem.loadPosition then
+                pos = elem.loadPosition(key)
+            else
+                local db = GetPositionDB()
+                pos = db and db[key]
+            end
+            if pos and pos.point == "CENTER" and pos.relPoint == "CENTER" then
+                ApplyCenterPosition(key, pos)
+            end
         end
     end
 
@@ -1251,24 +1290,56 @@ function MatchH.BreakMatchCycles(db)
     end
 end
 
+-- Apply every entry in a width/height match DB in dependency order
+-- (roots first, then their children, then grandchildren). This is
+-- required for chains like A -> B -> C: if C is processed before B,
+-- C reads B's stale width and ends up wrong even if B updates after.
+-- BreakMatchCycles runs before this, so the graph is guaranteed acyclic;
+-- the visited guard is defensive belt-and-suspenders.
+local function ApplyMatchesInDependencyOrder(db, applyFn)
+    if not db then return end
+    local depth = {}
+    local function GetDepth(k, visiting)
+        if depth[k] ~= nil then return depth[k] end
+        if visiting[k] then return 0 end
+        visiting[k] = true
+        local target = db[k]
+        if target and db[target] then
+            depth[k] = 1 + GetDepth(target, visiting)
+        else
+            depth[k] = 0
+        end
+        visiting[k] = nil
+        return depth[k]
+    end
+    local order = {}
+    for childKey in pairs(db) do
+        GetDepth(childKey, {})
+        order[#order + 1] = childKey
+    end
+    table.sort(order, function(a, b) return depth[a] < depth[b] end)
+    for _, childKey in ipairs(order) do
+        applyFn(childKey, db[childKey])
+    end
+end
+
 local function ApplyAllWidthHeightMatches()
+    -- Skip while CDM is mid-rebuild. CDM bars set this flag during their
+    -- own rebuild flow (login, spec swap, talent reconcile, etc.) and clear
+    -- it after CollectAndReanchor finishes populating cdmBarIcons. Width
+    -- matching that fires inside this window would read STALE bar widths
+    -- (sized for the previous spec's icon count) and propagate them as
+    -- the new target width. CDM itself fires ApplyAllWidthHeightMatches
+    -- at the end of its rebuild via _pendingApplyOnReanchor, so skipping
+    -- here is safe -- the right pass runs immediately after.
+    if EllesmereUI._cdmRebuilding then return end
     -- Break any circular chains from old data before applying
     MatchH.BreakMatchCycles(MatchH.GetWidthMatchDB())
     MatchH.BreakMatchCycles(MatchH.GetHeightMatchDB())
-    -- Width matches
-    local wdb = MatchH.GetWidthMatchDB()
-    if wdb then
-        for childKey, targetKey in pairs(wdb) do
-            MatchH.ApplyWidthMatch(childKey, targetKey)
-        end
-    end
-    -- Height matches
-    local hdb = MatchH.GetHeightMatchDB()
-    if hdb then
-        for childKey, targetKey in pairs(hdb) do
-            MatchH.ApplyHeightMatch(childKey, targetKey)
-        end
-    end
+    -- Width matches (dependency-sorted: roots first)
+    ApplyMatchesInDependencyOrder(MatchH.GetWidthMatchDB(), MatchH.ApplyWidthMatch)
+    -- Height matches (dependency-sorted)
+    ApplyMatchesInDependencyOrder(MatchH.GetHeightMatchDB(), MatchH.ApplyHeightMatch)
 end
 
 -------------------------------------------------------------------------------
@@ -1427,9 +1498,10 @@ ApplyAnchorPosition = function(childKey, targetKey, side, noMark, noMove)
     local childBar = GetBarFrame(childKey)
     local targetBar = GetBarFrame(targetKey)
     if not childBar or not targetBar then return end
-    -- Skip protected frames during combat (action bars), but allow
-    -- non-protected frames (resource bars, CDM, unit frames) to position.
-    if InCombatLockdown() and (childBar:IsProtected() or targetBar:IsProtected()) then return end
+    -- Skip protected child frames during combat (action bars). Reading
+    -- target bounds is safe even if the target is protected (e.g. oUF
+    -- unit frames) -- we only call SetPoint on the child, not the target.
+    if InCombatLockdown() and childBar:IsProtected() then return end
 
     -- If the target frame has no valid screen bounds (hidden / not yet laid out),
     -- bail to avoid computing garbage coordinates that cause oscillation.
@@ -1539,10 +1611,24 @@ ApplyAnchorPosition = function(childKey, targetKey, side, noMark, noMove)
         local acRatio = uiS / cS
         local bCenterX = centerX * acRatio
         local bCenterY = centerY * acRatio
-        -- Do NOT re-snap with SnapForES. The position is computed from the
-        -- target's live bounds (already on the pixel grid) plus stored offsets
-        -- (saved from a pixel-perfect drag). Re-snapping introduces drift when
-        -- the child has odd pixel dimensions (center between two grid points).
+        -- Snap with SnapCenterForDim, NOT SnapForES. The two behave
+        -- differently for odd-pixel-dimension frames:
+        --   SnapForES rounds the center to the nearest WHOLE pixel,
+        --   which forces an odd-dim frame to have half-pixel edges
+        --   (1px drift on every save & exit).
+        --   SnapCenterForDim picks the right grid based on parity:
+        --   even dim => center on whole pixel; odd dim => center on
+        --   integer + 0.5 so both edges land on whole pixels.
+        -- Without snapping, any tiny sub-pixel error in the stored
+        -- offset propagates straight to the rendered position.
+        local PPa = EllesmereUI and EllesmereUI.PP
+        if PPa and PPa.SnapCenterForDim then
+            local es = childBar:GetEffectiveScale()
+            local cwS = childBar:GetWidth() or cW
+            local chS = childBar:GetHeight() or cH
+            bCenterX = PPa.SnapCenterForDim(bCenterX, cwS, es)
+            bCenterY = PPa.SnapCenterForDim(bCenterY, chS, es)
+        end
         pcall(function()
             childBar:ClearAllPoints()
             childBar:SetPoint("CENTER", UIParent, "CENTER", bCenterX, bCenterY)
@@ -1857,26 +1943,27 @@ ApplyCenterPosition = function(barKey, pos)
         local side = anchorInfo.side
         local fw = (frame:GetWidth() or 0)
         local fh = (frame:GetHeight() or 0)
-        local halfW = math.floor(fw / 2)
-        local halfH = math.floor(fh / 2)
+        -- Use raw half-dimensions (fw/2, fh/2) instead of floor().
+        -- For odd-pixel-height frames, the center cy is integer + 0.5
+        -- (because edges are integer and (top+bottom)/2 is .5). Using
+        -- raw fh/2 = integer + 0.5 means cy +/- fh/2 lands back on integer
+        -- pixels. floor(fh/2) = integer would compute a half-pixel-off edge.
         if side == "LEFT" then
             anchor = "RIGHT"
-            adjX = cx + (fw - halfW)
+            adjX = cx + fw / 2
         elseif side == "RIGHT" then
             anchor = "LEFT"
-            adjX = cx - halfW
+            adjX = cx - fw / 2
         elseif side == "TOP" then
             anchor = "BOTTOM"
-            adjY = cy + (fh - halfH)
+            adjY = cy + fh / 2
         elseif side == "BOTTOM" then
             anchor = "TOP"
-            adjY = cy - halfH
+            adjY = cy - fh / 2
         end
     else
         -- No anchor relationship -- use grow direction to pick fixed edge.
-        -- Use floor for half-dimensions so the rounding is deterministic
-        -- regardless of whether the dimension is odd or even. This prevents
-        -- 1px drift from CENTER->edge->CENTER round-trip on odd-sized frames.
+        -- Use raw fw/2 and fh/2 (not floor). See comment above.
         local growDir = GetBarGrowDirActual(barKey)
         local fw = (frame:GetWidth() or 0)
         local fh = (frame:GetHeight() or 0)
@@ -1884,34 +1971,46 @@ ApplyCenterPosition = function(barKey, pos)
         -- (not laid out). Using CENTER avoids wrong edge placement from
         -- zero-size math. The bar will be re-positioned after LayoutBar runs.
         if growDir and growDir ~= "CENTER" and fw >= 1 and fh >= 1 then
-            local halfW = math.floor(fw / 2)
-            local halfH = math.floor(fh / 2)
             if growDir == "RIGHT" then
                 anchor = "LEFT"
-                adjX = cx - halfW
+                adjX = cx - fw / 2
                 adjY = cy
             elseif growDir == "LEFT" then
                 anchor = "RIGHT"
-                adjX = cx + (fw - halfW)
+                adjX = cx + fw / 2
                 adjY = cy
             elseif growDir == "DOWN" then
                 anchor = "TOP"
-                adjY = cy + (fh - halfH)
+                adjY = cy + fh / 2
                 adjX = cx
             elseif growDir == "UP" then
                 anchor = "BOTTOM"
-                adjY = cy - halfH
+                adjY = cy - fh / 2
                 adjX = cx
             end
         end
     end
 
-    -- Snap to physical pixel grid so the edge position is deterministic
+    -- Snap to physical pixel grid. Two cases:
+    --   1. Edge anchor (LEFT/RIGHT/TOP/BOTTOM with raw fw/2 or fh/2): adjX/Y
+    --      represents an EDGE offset that should land on a whole pixel.
+    --      SnapForES (round-to-nearest) is correct here.
+    --   2. CENTER anchor (no growDir / growDir=CENTER): adjX/Y is the
+    --      frame's center offset. For odd-pixel-dim frames, the center
+    --      must land on a half pixel (integer + 0.5) so that center +/-
+    --      dim/2 are both whole pixels. SnapCenterForDim handles this.
     local PPa = EllesmereUI and EllesmereUI.PP
-    if PPa and PPa.SnapForES and adjX and adjY then
+    if PPa and adjX and adjY then
         local es = frame:GetEffectiveScale()
-        adjX = PPa.SnapForES(adjX, es)
-        adjY = PPa.SnapForES(adjY, es)
+        if anchor == "CENTER" and PPa.SnapCenterForDim then
+            local fw = frame:GetWidth() or 0
+            local fh = frame:GetHeight() or 0
+            adjX = PPa.SnapCenterForDim(adjX, fw, es)
+            adjY = PPa.SnapCenterForDim(adjY, fh, es)
+        elseif PPa.SnapForES then
+            adjX = PPa.SnapForES(adjX, es)
+            adjY = PPa.SnapForES(adjY, es)
+        end
     end
 
     pcall(function()
@@ -1946,18 +2045,15 @@ EllesmereUI.ConvertToCenterPos = ConvertToCenterPos
 EllesmereUI.ApplyCenterPosition = ApplyCenterPosition
 
 SaveBarPosition = function(barKey, point, relPoint, x, y)
-    -- Convert to CENTER/CENTER before storing
+    -- Convert to CENTER/CENTER before storing.
+    -- ConvertToCenterPos reads the live frame's actual edges and produces an
+    -- exact center value: for odd-pixel-height frames the edges are integer
+    -- pixels and the center is integer + 0.5 (e.g. 540.5). We DELIBERATELY
+    -- do not snap that .5 away here -- the apply path uses raw fh/2 (also
+    -- ending in .5 for odd heights) so the round-trip cy ± fh/2 lands back
+    -- on integer pixels. Snapping cy to integer here would force the apply
+    -- path to compute a half-pixel edge, causing a 1px drift on save & exit.
     local cp, crp, cx, cy = ConvertToCenterPos(barKey, point, relPoint, x, y)
-
-    -- Snap to physical pixel grid so stored values are clean whole-pixel
-    local PPa = EllesmereUI and EllesmereUI.PP
-    if PPa and PPa.SnapForES and cx and cy then
-        local frame = GetBarFrame(barKey)
-        local es = frame and frame:GetEffectiveScale()
-                   or (UIParent and UIParent:GetEffectiveScale() or 1)
-        cx = PPa.SnapForES(cx, es)
-        cy = PPa.SnapForES(cy, es)
-    end
 
     -- Registered element?
     local elem = registeredElements[barKey]
@@ -2050,17 +2146,12 @@ local function MigrateAndApplyPosition(barKey, pos, frame)
             frame:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 0)
         end)
     end
-    -- Convert to CENTER using live frame bounds (most accurate)
-    local cp, crp, cx, cy = ConvertToCenterPos(barKey, pos.point, pos.relPoint, pos.x, pos.y)
-    -- Snap to physical pixel grid before persisting
-    local PPa = EllesmereUI and EllesmereUI.PP
-    if PPa and PPa.SnapForES and cx and cy then
-        local snapFrame = frame or GetBarFrame(barKey)
-        local es = snapFrame and snapFrame:GetEffectiveScale()
-                   or (UIParent and UIParent:GetEffectiveScale() or 1)
-        cx = PPa.SnapForES(cx, es)
-        cy = PPa.SnapForES(cy, es)
-    end
+    -- Convert to CENTER using live frame bounds (most accurate).
+    -- ConvertToCenterPos reads frame edges and computes (top+bottom)/2 etc.,
+    -- which gives exact center values (integer + 0.5 for odd-pixel-dim
+    -- frames). DO NOT snap with SnapForES here -- it would round the .5
+    -- away, and ApplyCenterPosition's edge math (using raw fh/2 for odd
+    -- heights = integer + 0.5) requires the .5 to round-trip correctly.
     -- Save back in CENTER format (suppress rebuilds during migration)
     EllesmereUI._propagatingSave = true
     local elem = registeredElements[barKey]
@@ -2163,13 +2254,17 @@ local function ApplySavedPositions()
         local unresolved = {}
         for _, entry in ipairs(sorted) do
             local childKey, info = entry.key, entry.info
-            if GetBarFrame(childKey) and GetBarFrame(info.target) then
-                local target = GetBarFrame(info.target)
-                if target:GetLeft() then
-                    ApplyAnchorPosition(childKey, info.target, info.side)
-                else
-                    unresolved[childKey] = info
-                end
+            local childFrame = GetBarFrame(childKey)
+            local targetFrame = GetBarFrame(info.target)
+            -- Apply now if both frames exist and target has bounds. Otherwise
+            -- queue for retry. Previously a missing child or target frame
+            -- caused the anchor to be silently dropped (never retried), which
+            -- left bars at their fallback CENTER/CENTER position when an
+            -- addon's unlock element registration raced with this apply call.
+            if childFrame and targetFrame and targetFrame:GetLeft() then
+                ApplyAnchorPosition(childKey, info.target, info.side)
+            else
+                unresolved[childKey] = info
             end
         end
         if next(unresolved) then
@@ -2178,8 +2273,9 @@ local function ApplySavedPositions()
                 retries = retries + 1
                 local still = {}
                 for childKey, info in pairs(unresolved) do
+                    local childFrame = GetBarFrame(childKey)
                     local target = GetBarFrame(info.target)
-                    if target and target:GetLeft() then
+                    if childFrame and target and target:GetLeft() then
                         ApplyAnchorPosition(childKey, info.target, info.side)
                     else
                         still[childKey] = info

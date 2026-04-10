@@ -557,6 +557,14 @@ EllesmereUI.DD_TXT_A  = DD_TXT_A
 EllesmereUI.DD_TXT_HA = DD_TXT_HA
 EllesmereUI.DD_ITEM_HL_A  = DD_ITEM_HL_A
 EllesmereUI.DD_ITEM_SEL_A = DD_ITEM_SEL_A
+-- Blizzard reskin colors (tooltips, context menus, popups)
+EllesmereUI.RESKIN = {
+    BG_R = 0.067, BG_G = 0.067, BG_B = 0.067,
+    TT_ALPHA   = 0.92,   -- tooltip background alpha
+    CTX_ALPHA  = 0.95,   -- blizzard context menu background alpha
+    QT_ALPHA   = 0.97,   -- quest tracker right-click menu alpha
+    BRD_ALPHA  = 0.18,   -- border alpha (white)
+}
 -- Layout
 EllesmereUI.DUAL_ITEM_W  = DUAL_ITEM_W
 EllesmereUI.DUAL_GAP     = DUAL_GAP
@@ -681,6 +689,37 @@ do
         local onePixel = PP.perfect / es
         local physPixels = math.floor(x / onePixel + 0.5)
         return physPixels * onePixel
+    end
+
+    ---------------------------------------------------------------------------
+    --  SnapCenterForDim(value, dim, effectiveScale)
+    --
+    --  Snap a CENTER coordinate so that both edges of a frame with the given
+    --  dimension land on physical pixel boundaries. For frames with an EVEN
+    --  pixel dimension, the center must land on a whole pixel. For frames
+    --  with an ODD pixel dimension, the center must land on a half pixel
+    --  (integer + 0.5) so that center +/- dim/2 are both whole pixels.
+    --
+    --  This is the correct snap function for CENTER-anchored frames stored
+    --  in CENTER/CENTER coordinate format. Plain SnapForES rounds to whole
+    --  pixels, which loses the necessary +0.5 for odd-dimension frames and
+    --  causes a 1px drift on save & exit / profile change / spec swap.
+    ---------------------------------------------------------------------------
+    function PP.SnapCenterForDim(value, dim, es)
+        if value == nil then return value end
+        es = es or (UIParent and UIParent:GetEffectiveScale() or 1)
+        local onePixel = PP.perfect / es
+        local valuePx = value / onePixel
+        if dim and dim > 0 then
+            local dimPx = math.floor(dim / onePixel + 0.5)
+            if dimPx % 2 == 1 then
+                -- Odd dimension: snap center to nearest half-pixel grid point
+                -- (integer + 0.5) so edges land on whole pixels.
+                return (math.floor(valuePx) + 0.5) * onePixel
+            end
+        end
+        -- Even dimension (or unknown): snap center to nearest whole pixel.
+        return math.floor(valuePx + 0.5) * onePixel
     end
 
     ---------------------------------------------------------------------------
@@ -857,8 +896,16 @@ do
         -- Simplified: perfect / es  gives 1 physical pixel in frame coords.
         local es = container:GetEffectiveScale()
         local onePixel = es > 0 and (PP.perfect / es) or PP.mult
-        local t = math.max(onePixel, math.floor((borderSize or 1) + 0.5) * onePixel)
+        local bs = borderSize or 1
+        local t = bs > 0 and math.max(onePixel, math.floor(bs + 0.5) * onePixel) or 0
         local top, bottom, left, right = container._top, container._bottom, container._left, container._right
+
+        -- Hide all strips when border size is 0 (SetHeight/Width(0) still renders 1px)
+        if t == 0 then
+            top:Hide(); bottom:Hide(); left:Hide(); right:Hide()
+            return
+        end
+        top:Show(); bottom:Show(); left:Show(); right:Show()
 
         -- Top: full width, sits at the top edge
         top:ClearAllPoints()
@@ -904,7 +951,16 @@ do
             local c, f = entry.container, entry.frame
             if c and f then
                 local bd = _ppBorderData[f]
-                SnapBorderTextures(c, f, bd and bd.borderSize or 1)
+                -- Wrapped in pcall: some registered frames can become
+                -- invalid during loading screens (teleports, pool releases)
+                -- and throw "bad self" when methods are called on them.
+                -- Invalidate the entry on failure so we skip it forever
+                -- and don't spam the error on every scale/PEW event.
+                local ok = pcall(SnapBorderTextures, c, f, bd and bd.borderSize or 1)
+                if not ok then
+                    entry.container = nil
+                    entry.frame = nil
+                end
             end
         end
     end
@@ -2017,6 +2073,40 @@ function EllesmereUI.AppendSharedMediaTextures(names, order, castBarNames, textu
 end
 
 -------------------------------------------------------------------------------
+--  Append LibSharedMedia-3.0 sounds into a runtime sound dropdown table.
+--  Signature: AppendSharedMediaSounds(paths, names, order)
+--    paths   – key → sound file path table
+--    names   – key → display name string table
+--    order   – ordered array of keys (receives "---" + SM keys appended)
+--  Safe to call multiple times; duplicate keys are skipped via the paths
+--  table guard.
+-------------------------------------------------------------------------------
+function EllesmereUI.AppendSharedMediaSounds(paths, names, order)
+    local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
+    if not LSM then return end
+    local smSounds = LSM:HashTable("sound")
+    if not smSounds then return end
+
+    local sorted = {}
+    for name in pairs(smSounds) do
+        local key = "sm:" .. name
+        if not paths[key] then
+            sorted[#sorted + 1] = name
+        end
+    end
+    if #sorted == 0 then return end
+    table.sort(sorted)
+
+    order[#order + 1] = "---"
+    for _, name in ipairs(sorted) do
+        local key = "sm:" .. name
+        paths[key] = smSounds[name]
+        names[key] = name
+        order[#order + 1] = key
+    end
+end
+
+-------------------------------------------------------------------------------
 --  Append LibSharedMedia-3.0 fonts into a runtime font dropdown table.
 --  Signature: AppendSharedMediaFonts(values, order, opts)
 --    values  – key → { text, font } table (or key → path when keyByName=true)
@@ -2376,6 +2466,17 @@ function EllesmereUI:ShowConfirmPopup(opts)
             popup._dimmer:Hide()
             if opts.onConfirm then opts.onConfirm() end
         end)
+    end
+
+    -- Counter-scale the popup to match the options panel when UIParent
+    -- has been rescaled by the pixel-perfect system. The dimmer stays at
+    -- scale 1 (covers the full screen), but the popup itself renders at
+    -- the same visual size as the main options frame.
+    local mf = EllesmereUI._mainFrame
+    if mf and mf:GetScale() ~= 1 then
+        popup:SetScale(mf:GetScale())
+    else
+        popup:SetScale(1)
     end
 
     popup._dimmer:Show()
@@ -5457,6 +5558,26 @@ end
 --  Module Registration
 -------------------------------------------------------------------------------
 function EllesmereUI:RegisterModule(folderName, config)
+    -- Only allow registration from EllesmereUI addon files.
+    -- Extract the addon folder name from the caller's file path.
+    local caller = debugstack(2, 1, 0) or ""
+    local callerFolder = caller:match("AddOns/([^/]+)/")
+    if callerFolder then
+        local ALLOWED = {
+            EllesmereUI = true,
+            EllesmereUIActionBars = true,
+            EllesmereUIAuraBuffReminders = true,
+            EllesmereUIBasics = true,
+            EllesmereUICooldownManager = true,
+            EllesmereUICursor = true,
+            EllesmereUINameplates = true,
+            EllesmereUIPartyMode = true,
+            EllesmereUIRaidFrames = true,
+            EllesmereUIResourceBars = true,
+            EllesmereUIUnitFrames = true,
+        }
+        if not ALLOWED[callerFolder] then return end
+    end
     modules[folderName] = config
     -- If UI is already built, update sidebar button immediately
     -- Otherwise, RefreshSidebarStates will handle it when the panel first opens
@@ -6078,7 +6199,7 @@ end
 -------------------------------------------------------------------------------
 --  Slash commands
 -------------------------------------------------------------------------------
-EllesmereUI.VERSION = "6.2.2"
+EllesmereUI.VERSION = "6.4.7"
 
 -- Register this addon's version into a shared global table (taint-free at load time)
 if not _G._EUI_AddonVersions then _G._EUI_AddonVersions = {} end
@@ -6151,15 +6272,11 @@ do
                 if not adb then return false end
                 for key, info in pairs(adb) do
                     if info.target then
-                        -- Check if this element or its target is an action bar
+                        -- Check if an action bar itself is anchored to something
                         local isBar = (key == "MainBar" or key == "StanceBar" or key == "PetBar"
                             or key == "MicroBar" or key == "BagBar" or key == "XPBar" or key == "RepBar"
                             or (key:sub(1, 3) == "Bar" and tonumber(key:sub(4))))
-                        local targetIsBar = (info.target == "MainBar" or info.target == "StanceBar"
-                            or info.target == "PetBar" or info.target == "MicroBar"
-                            or info.target == "BagBar" or info.target == "XPBar" or info.target == "RepBar"
-                            or (info.target:sub(1, 3) == "Bar" and tonumber(info.target:sub(4))))
-                        if isBar or targetIsBar then return true end
+                        if isBar then return true end
                     end
                 end
                 return false
@@ -6935,6 +7052,11 @@ initFrame:SetScript("OnEvent", function(self, event)
 
         local _gameMenuBaseHeight = nil
         hooksecurefunc(GameMenuFrame, "Layout", function()
+            -- Skip entirely during combat to avoid protected frame taint
+            if InCombatLockdown() then
+                btn:Hide()
+                return
+            end
             -- Respect the hide setting
             if EllesmereUIDB and EllesmereUIDB.hideGameMenuButton then
                 btn:Hide()
@@ -6994,8 +7116,18 @@ initFrame:SetScript("OnEvent", function(self, event)
     if EllesmereUIDB then
         local theme = EllesmereUIDB.activeTheme or "EllesmereUI"
         ELLESMERE_GREEN._themeEnabled = true
-        local r, g, b = EllesmereUI.ResolveThemeColor(theme)
-        ELLESMERE_GREEN.r, ELLESMERE_GREEN.g, ELLESMERE_GREEN.b = r, g, b
+        local themeR, themeG, themeB = EllesmereUI.ResolveThemeColor(theme)
+        -- Apply theme color to window background only
+        if EllesmereUI._applyBgTint then
+            EllesmereUI._applyBgTint(themeR, themeG, themeB)
+        end
+        -- Accent color: custom override or fall back to theme color
+        local ca = EllesmereUIDB.customAccentColor
+        if ca then
+            ELLESMERE_GREEN.r, ELLESMERE_GREEN.g, ELLESMERE_GREEN.b = ca.r or themeR, ca.g or themeG, ca.b or themeB
+        else
+            ELLESMERE_GREEN.r, ELLESMERE_GREEN.g, ELLESMERE_GREEN.b = themeR, themeG, themeB
+        end
     end
 
     -- Spell ID + Icon ID on Tooltip (developer option)
@@ -7472,3 +7604,297 @@ function EllesmereUI.SetPlayerCastBarSuppressed(owner, suppressed)
         blizzBar:SetUnit("player")
     end
 end
+
+-------------------------------------------------------------------------------
+--  Custom In-Game Tooltip Skinning
+--  Restyles Blizzard's GameTooltip and related frames with EUI's dark style.
+--  Visual-only changes (alpha, backdrop color, font). No Hide/Show/SetParent
+--  on Blizzard frames. All hooks are post-hooks via hooksecurefunc.
+-------------------------------------------------------------------------------
+;(function()
+    local _ttSkinned = {}
+    local _isSecret = issecretvalue
+    local _PP  -- resolved lazily
+    local _select = select
+    local _GameTooltip = GameTooltip
+    local _RAID_CC = RAID_CLASS_COLORS
+    local _nameL1 = nil  -- cached ref to GameTooltipTextLeft1
+
+    local function _enabled()
+        return not EllesmereUIDB or EllesmereUIDB.customTooltips ~= false
+    end
+
+    local function _ttSkin(tt)
+        if not tt or tt:IsForbidden() or not _enabled() then return end
+        if _isSecret and _isSecret(tt:GetWidth()) then return end
+        if not _PP then _PP = EllesmereUI and EllesmereUI.PP end
+        if tt.NineSlice then tt.NineSlice:SetAlpha(0) end
+        if not tt._euiBg then
+            tt._euiBg = tt:CreateTexture(nil, "BACKGROUND", nil, -8)
+            tt._euiBg:SetAllPoints()
+            local RS = EllesmereUI.RESKIN
+            tt._euiBg:SetColorTexture(RS.BG_R, RS.BG_G, RS.BG_B, RS.TT_ALPHA)
+            if _PP and _PP.CreateBorder then
+                _PP.CreateBorder(tt, 1, 1, 1, RS.BRD_ALPHA, 1, "OVERLAY", 7)
+            end
+        end
+        tt._euiBg:Show()
+    end
+
+    local function _ttFonts(tt)
+        if not tt or tt:IsForbidden() or not _enabled() then return end
+        local fp = EllesmereUI.GetFontPath and EllesmereUI.GetFontPath() or STANDARD_TEXT_FONT
+        local ol = EllesmereUI.GetFontOutlineFlag and EllesmereUI.GetFontOutlineFlag() or ""
+        local name = tt.GetName and tt:GetName()
+        if not name then return end
+        local nLines = tt.NumLines and tt:NumLines() or 30
+        for i = 1, nLines do
+            local left = _G[name .. "TextLeft" .. i]
+            if not left then break end
+            left:SetFont(fp, (i == 1) and 13 or 11, ol)
+            local right = _G[name .. "TextRight" .. i]
+            if right then right:SetFont(fp, 11, ol) end
+        end
+    end
+
+    local function _ttOnShow(self) _ttSkin(self); _ttFonts(self) end
+
+    local function _ttHook(tt)
+        if not tt or tt:IsForbidden() or _ttSkinned[tt] then return end
+        _ttSkinned[tt] = true
+        tt:HookScript("OnShow", _ttOnShow)
+    end
+
+    local function _accentEnabled()
+        return EllesmereUIDB and EllesmereUIDB.accentReskinElements
+    end
+
+    local function _ttUnitColor(tt)
+        if tt ~= _GameTooltip or tt:IsForbidden() then return end
+        local _, unit = tt:GetUnit()
+        if not unit then
+            if UnitExists("mouseover") then unit = "mouseover" end
+        end
+        if not unit or (_isSecret and _isSecret(unit)) then return end
+        if not UnitIsPlayer(unit) then return end
+        local _, classFile = UnitClass(unit)
+        if not classFile or (_isSecret and _isSecret(classFile)) then return end
+        if not _nameL1 then _nameL1 = _G.GameTooltipTextLeft1 end
+        if not _nameL1 then return end
+        -- Strip player titles (default on: tooltipPlayerTitles is opt-in)
+        local db = EllesmereUIDB
+        if not (db and db.tooltipPlayerTitles) then
+            local name = UnitName(unit)
+            if name and not (_isSecret and _isSecret(name)) then
+                local realm = select(2, UnitName(unit))
+                local display = (realm and realm ~= "") and (name .. "-" .. realm) or name
+                _nameL1:SetText(display)
+            end
+        end
+        -- Class color the name line and the status bar. Always on when the
+        -- unit is a player, independent of the "Accent Colored Elements"
+        -- toggle (which only governs accent recoloring of headers, arrows,
+        -- and spell titles).
+        local cc = _RAID_CC and _RAID_CC[classFile]
+        if cc then
+            _nameL1:SetTextColor(cc.r, cc.g, cc.b)
+            if GameTooltipStatusBar then
+                GameTooltipStatusBar:SetStatusBarColor(cc.r, cc.g, cc.b)
+            end
+        end
+    end
+
+    local function _ttInit()
+        for _, tt in ipairs({
+            _GameTooltip, ShoppingTooltip1, ShoppingTooltip2,
+            ItemRefTooltip, ItemRefShoppingTooltip1, ItemRefShoppingTooltip2,
+            FriendsTooltip, EmbeddedItemTooltip, GameSmallHeaderTooltip, QuickKeybindTooltip,
+            _G.WarCampaignTooltip, _G.ReputationParagonTooltip,
+            _G.LibDBIconTooltip, _G.SettingsTooltip,
+            QuestScrollFrame and QuestScrollFrame.StoryTooltip,
+            QuestScrollFrame and QuestScrollFrame.CampaignTooltip,
+        }) do
+            _ttHook(tt)
+        end
+        if SharedTooltip_SetBackdropStyle then
+            hooksecurefunc("SharedTooltip_SetBackdropStyle", _ttSkin)
+        end
+        if GameTooltipStatusBar then
+            GameTooltipStatusBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+            local sbBg = GameTooltipStatusBar:CreateTexture(nil, "BACKGROUND")
+            sbBg:SetAllPoints(); sbBg:SetColorTexture(0, 0, 0, 0.5)
+            GameTooltipStatusBar:ClearAllPoints()
+            GameTooltipStatusBar:SetPoint("BOTTOMLEFT", _GameTooltip, "BOTTOMLEFT", 1, 1)
+            GameTooltipStatusBar:SetPoint("BOTTOMRIGHT", _GameTooltip, "BOTTOMRIGHT", -1, 1)
+            GameTooltipStatusBar:SetHeight(3)
+        end
+        -- Accent-color the title line for spells/macros (not items or units)
+        local function _ttAccentTitle(tt)
+            if tt ~= _GameTooltip or tt:IsForbidden() or not _accentEnabled() then return end
+            if not _nameL1 then _nameL1 = _G.GameTooltipTextLeft1 end
+            if _nameL1 then
+                local EG = EllesmereUI.ELLESMERE_GREEN
+                if EG then _nameL1:SetTextColor(EG.r, EG.g, EG.b) end
+            end
+        end
+        if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and Enum.TooltipDataType then
+            TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Unit, _ttUnitColor)
+            TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Spell, _ttAccentTitle)
+            TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Macro, _ttAccentTitle)
+        else
+            _GameTooltip:HookScript("OnTooltipSetUnit", _ttUnitColor)
+            _GameTooltip:HookScript("OnTooltipSetSpell", _ttAccentTitle)
+        end
+    end
+
+    -- Context menu skinning
+    local _menuSkinned = {}
+
+    local function _menuSkinFrame(frame)
+        if not frame or frame:IsForbidden() or not _enabled() then return end
+        for i = 1, _select("#", frame:GetRegions()) do
+            local region = _select(i, frame:GetRegions())
+            if region and region:IsObjectType("Texture") and not region._euiOwned then
+                local RS = EllesmereUI.RESKIN
+                region:SetColorTexture(RS.BG_R, RS.BG_G, RS.BG_B, 1)
+                region:SetAlpha(RS.CTX_ALPHA)
+                region:ClearAllPoints()
+                region:SetPoint("TOPLEFT", frame, "TOPLEFT", 1, -1)
+                region:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -1, 1)
+            end
+        end
+        if not _menuSkinned[frame] then
+            _menuSkinned[frame] = true
+            if _PP and _PP.CreateBorder then
+                local RS = EllesmereUI.RESKIN
+                _PP.CreateBorder(frame, 1, 1, 1, RS.BRD_ALPHA, 1, "OVERLAY", 7)
+            end
+        end
+    end
+
+    local function _menuOnOpen(manager, _, menuDescription)
+        if not _enabled() then return end
+        local menu = manager.GetOpenMenu and manager:GetOpenMenu()
+        if menu then
+            _menuSkinFrame(menu)
+        end
+        if menuDescription and menuDescription.AddMenuAcquiredCallback then
+            menuDescription:AddMenuAcquiredCallback(_menuSkinFrame)
+        end
+    end
+
+    local function _menuInit()
+        if not _G.Menu or not _G.Menu.GetManager then return end
+        local mgr = _G.Menu.GetManager()
+        if not mgr then return end
+        hooksecurefunc(mgr, "OpenMenu", function(self, ownerRegion, menuDescription)
+            _menuOnOpen(self, ownerRegion, menuDescription)
+        end)
+        hooksecurefunc(mgr, "OpenContextMenu", function(self, ownerRegion, menuDescription)
+            _menuOnOpen(self, ownerRegion, menuDescription)
+        end)
+    end
+
+    -- Static popup skinning
+    local function _popupSkin(popup)
+        if not popup or popup:IsForbidden() then return end
+        if not _enabled() then return end
+        -- Strip textures on the popup frame itself
+        for i = 1, _select("#", popup:GetRegions()) do
+            local r = _select(i, popup:GetRegions())
+            if r and r:IsObjectType("Texture") and not r._euiOwned then
+                r:SetTexture(nil)
+                if r.SetAtlas then r:SetAtlas("") end
+            end
+        end
+        -- Hide the BG border frame (StaticPopupN.BG)
+        if popup.BG then popup.BG:SetAlpha(0) end
+        if popup.NineSlice then popup.NineSlice:SetAlpha(0) end
+        -- Our dark background + border (once)
+        if not popup._euiBg then
+            local RS = EllesmereUI.RESKIN
+            popup._euiBg = popup:CreateTexture(nil, "BACKGROUND", nil, -8)
+            popup._euiBg:SetAllPoints()
+            popup._euiBg:SetColorTexture(RS.BG_R, RS.BG_G, RS.BG_B, RS.QT_ALPHA)
+            popup._euiBg._euiOwned = true
+            if not _PP then _PP = EllesmereUI and EllesmereUI.PP end
+            if _PP and _PP.CreateBorder then
+                _PP.CreateBorder(popup, 1, 1, 1, RS.BRD_ALPHA, 1, "OVERLAY", 7)
+            end
+        end
+        popup._euiBg:Show()
+        -- Skin buttons
+        for i = 1, 4 do
+            local btn = popup["button" .. i] or _G[popup:GetName() and (popup:GetName() .. "Button" .. i)]
+            if btn and not btn._euiSkinned then
+                btn._euiSkinned = true
+                for j = 1, select("#", btn:GetRegions()) do
+                    local r = select(j, btn:GetRegions())
+                    if r and r:IsObjectType("Texture") and r ~= btn:GetFontString() then
+                        r:SetTexture(nil)
+                        if r.SetAtlas then r:SetAtlas("") end
+                    end
+                end
+                local RS = EllesmereUI.RESKIN
+                local EG = EllesmereUI.ELLESMERE_GREEN
+                local useAccent = _accentEnabled() and EG
+                local btnBg = btn:CreateTexture(nil, "BACKGROUND", nil, -6)
+                btnBg:SetAllPoints()
+                btnBg:SetColorTexture(0.1, 0.1, 0.1, 0.8)
+                btnBg._euiOwned = true
+                if not _PP then _PP = EllesmereUI and EllesmereUI.PP end
+                if _PP and _PP.CreateBorder then
+                    if useAccent then
+                        _PP.CreateBorder(btn, EG.r, EG.g, EG.b, 0.5, 1, "OVERLAY", 7)
+                    else
+                        _PP.CreateBorder(btn, 1, 1, 1, RS.BRD_ALPHA, 1, "OVERLAY", 7)
+                    end
+                end
+                if useAccent then
+                    local fs = btn:GetFontString()
+                    if fs then fs:SetTextColor(EG.r, EG.g, EG.b) end
+                end
+            end
+        end
+        -- Skin edit box if present
+        local eb = popup.editBox or (popup.GetName and _G[popup:GetName() .. "EditBox"])
+        if eb and not eb._euiSkinned then
+            eb._euiSkinned = true
+            for j = 1, select("#", eb:GetRegions()) do
+                local r = select(j, eb:GetRegions())
+                if r and r:IsObjectType("Texture") then
+                    r:SetTexture(nil)
+                    if r.SetAtlas then r:SetAtlas("") end
+                end
+            end
+            local ebBg = eb:CreateTexture(nil, "BACKGROUND", nil, -6)
+            ebBg:SetAllPoints()
+            ebBg:SetColorTexture(0.05, 0.05, 0.05, 0.9)
+            ebBg._euiOwned = true
+        end
+    end
+
+    local function _popupInit()
+        for i = 1, STATICPOPUP_NUMDIALOGS or 4 do
+            local popup = _G["StaticPopup" .. i]
+            if popup then
+                popup:HookScript("OnShow", function(self) _popupSkin(self) end)
+            end
+        end
+    end
+
+    do
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("PLAYER_LOGIN")
+        f:SetScript("OnEvent", function(self)
+            self:UnregisterAllEvents()
+            if not EllesmereUIDB or EllesmereUIDB.customTooltips ~= false then
+                _ttInit()
+                _menuInit()
+                _popupInit()
+            end
+        end)
+    end
+    EllesmereUI._initTooltipSkins = function() _ttInit(); _menuInit(); _popupInit() end
+end)()
+

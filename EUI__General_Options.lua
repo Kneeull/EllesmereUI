@@ -6,7 +6,7 @@
 --  Default-application policy:
 --    We use C_CVar.GetCVarInfo(name) to get both the current value and
 --    Blizzard's built-in default.  Our preferred defaults are only applied
---    when the CVar is still sitting at Blizzard's default — meaning
+--    when the CVar is still sitting at Blizzard's default -- meaning
 --    neither the player nor another addon has touched it.  If the value
 --    differs from the Blizzard default in any way, we leave it alone.
 --    Widgets always read the live CVar value so they stay in sync
@@ -18,13 +18,13 @@ local ADDON_NAME = ...
 --  Page / section names
 -------------------------------------------------------------------------------
 local PAGE_GENERAL      = "General"
-local PAGE_CORE        = "Quick Setup"
 local PAGE_COLORS      = "Fonts & Colors"
 local PAGE_PROFILES    = "Profiles"
+local PAGE_QOL         = "Quality of Life"
 
 
 -------------------------------------------------------------------------------
---  FCT font — handled by EllesmereUI_Startup.lua which runs earlier.
+--  FCT font -- handled by EllesmereUI_Startup.lua which runs earlier.
 -------------------------------------------------------------------------------
 
 -- Wait for EllesmereUI to exist
@@ -33,7 +33,7 @@ initFrame:RegisterEvent("PLAYER_LOGIN")
 initFrame:SetScript("OnEvent", function(self)
     self:UnregisterEvent("PLAYER_LOGIN")
 
-    -- Re-apply combat text font at login — handled by EllesmereUI_Startup.lua.
+    -- Re-apply combat text font at login -- handled by EllesmereUI_Startup.lua.
 
     if not EllesmereUI or not EllesmereUI.RegisterModule then return end
     local PP = EllesmereUI.PanelPP
@@ -73,7 +73,7 @@ initFrame:SetScript("OnEvent", function(self)
     end
 
     ---------------------------------------------------------------------------
-    --  EUI preferred defaults — only applied when CVar == Blizzard default
+    --  EUI preferred defaults -- only applied when CVar == Blizzard default
     --
     --  { cvarName, euiPreferred }
     ---------------------------------------------------------------------------
@@ -445,7 +445,7 @@ initFrame:SetScript("OnEvent", function(self)
         seterrorhandler(GrabError)
         -- Keep scriptErrors=1 so WoW invokes our custom handler
         SetCVarSafe("scriptErrors", "1")
-        -- Suppress default Lua-error popup (NOT UIErrorsFrame — that shows
+        -- Suppress default Lua-error popup (NOT UIErrorsFrame -- that shows
         -- in-game red text like "Can't do that yet" which must stay visible)
         if ScriptErrorsFrame then
             ScriptErrorsFrame:Hide()
@@ -654,9 +654,27 @@ initFrame:SetScript("OnEvent", function(self)
             themeValues[name] = name
         end
 
+        -- Row 1: UI Accent Color | EUI Options Theme
         local themeRow
         themeRow, h = W:DualRow(parent, y,
-            { type="dropdown", text="Active Theme",
+            { type="multiSwatch", text="UI Accent Color",
+              tooltip="Sets the accent color used across all EllesmereUI elements (tabs, glows, highlights, borders). Defaults to your theme color.",
+              swatches = {
+                { hasAlpha = false,
+                  getValue = function()
+                      local ca = EllesmereUIDB and EllesmereUIDB.customAccentColor
+                      if ca then return ca.r, ca.g, ca.b, 1 end
+                      local EG = EllesmereUI.ELLESMERE_GREEN
+                      return EG.r, EG.g, EG.b, 1
+                  end,
+                  setValue = function(r, g, b)
+                      if not EllesmereUIDB then EllesmereUIDB = {} end
+                      EllesmereUIDB.customAccentColor = { r = r, g = g, b = b }
+                      -- Live apply using the same optimized system as theme colors
+                      EllesmereUI.SetAccentColor(r, g, b)
+                  end },
+              } },
+            { type="dropdown", text="EUI Options Theme",
               values=themeValues,
               order=EllesmereUI.THEME_ORDER,
               getValue=function()
@@ -665,8 +683,92 @@ initFrame:SetScript("OnEvent", function(self)
               setValue=function(v)
                 EllesmereUI.SetActiveTheme(v)
                 EllesmereUI:RefreshPage()
+              end }
+        );  y = y - h
+
+        -- Inline color swatch on EUI Options Theme (right region)
+        do
+            local rightRgn = themeRow._rightRegion
+            local function isCustomColorOff()
+                return EllesmereUI.GetActiveTheme() ~= "Custom Color"
+            end
+
+            local tcGet = function()
+                local db = EllesmereUIDB
+                local sa = db and db.accentColor
+                if sa then return sa.r, sa.g, sa.b, 1 end
+                return EllesmereUI.GetAccentColor()
+            end
+            local tcSet = function(r, g, b)
+                if not EllesmereUIDB then EllesmereUIDB = {} end
+                EllesmereUIDB.accentColor = { r = r, g = g, b = b }
+                -- Only update the window background, not the accent color
+                if EllesmereUI._applyBgTint then
+                    EllesmereUI._applyBgTint(r, g, b)
+                end
+            end
+            local tcSwatch, tcUpdateSwatch = EllesmereUI.BuildColorSwatch(rightRgn, rightRgn:GetFrameLevel() + 5, tcGet, tcSet, nil, 20)
+            PP.Point(tcSwatch, "RIGHT", rightRgn._control, "LEFT", -12, 0)
+            rightRgn._lastInline = tcSwatch
+            EllesmereUI.RegisterWidgetRefresh(function()
+                local off = isCustomColorOff()
+                tcSwatch:SetAlpha(off and 0.15 or 1)
+                tcSwatch:EnableMouse(not off)
+                tcUpdateSwatch()
+            end)
+            tcSwatch:SetAlpha(isCustomColorOff() and 0.15 or 1)
+            tcSwatch:EnableMouse(not isCustomColorOff())
+            tcSwatch:SetScript("OnEnter", function(self)
+                if isCustomColorOff() then
+                    EllesmereUI.ShowWidgetTooltip(self, "This option is only available for the Custom Color Theme")
+                end
+            end)
+            tcSwatch:SetScript("OnLeave", function()
+                EllesmereUI.HideWidgetTooltip()
+            end)
+        end
+
+        -- Row 2: UI Scale | EUI Options Scale
+        _, h = W:DualRow(parent, y,
+            { type="slider", text="UI Scale",
+              min=0.40, max=1.00, step=0.01,
+              tooltip="Sets the scale of the entire game UI. Lower values make everything smaller, higher values make everything larger.",
+              getValue=function()
+                if EllesmereUI._uiScaleDragVal then
+                    return EllesmereUI._uiScaleDragVal
+                end
+                return EllesmereUIDB and EllesmereUIDB.ppUIScale or EllesmereUI.PP.PixelBestSize()
+              end,
+              setValue=function(v)
+                if not EllesmereUIDB then EllesmereUIDB = {} end
+                EllesmereUI._uiScaleDragVal = v
+                EllesmereUIDB.ppUIScaleAuto = false
+                local mf = EllesmereUI._mainFrame
+                local panelScaleBefore
+                if mf then panelScaleBefore = mf:GetEffectiveScale() end
+                EllesmereUI.PP.SetUIScale(v)
+                if mf and panelScaleBefore then
+                    local newEff = UIParent:GetEffectiveScale()
+                    if newEff > 0 then mf:SetScale(panelScaleBefore / newEff) end
+                end
+                if not EllesmereUI._uiScaleCleanup then
+                    EllesmereUI._uiScaleCleanup = true
+                    C_Timer.After(0, function()
+                        if not EllesmereUI._sliderDragging then
+                            EllesmereUI._uiScaleDragVal = nil
+                            EllesmereUI:ShowConfirmPopup({
+                                title = "UI Scale Changed",
+                                message = "Blizzard's Edit Mode snapping may not work correctly until you reload your UI.",
+                                confirmText = "Reload Now",
+                                cancelText = "Later",
+                                onConfirm = function() ReloadUI() end,
+                            })
+                        end
+                        EllesmereUI._uiScaleCleanup = false
+                    end)
+                end
               end },
-            { type="dropdown", text="Window Scale",
+            { type="dropdown", text="EUI Options Scale",
               values={ ["Tiny (75%)"]="Tiny (75%)", ["Small (90%)"]="Small (90%)", ["Normal (100%)"]="Normal (100%)", ["Large (110%)"]="Large (110%)", ["Huge (125%)"]="Huge (125%)", ["Massive (150%)"]="Massive (150%)" },
               order={ "Tiny (75%)", "Small (90%)", "Normal (100%)", "Large (110%)", "Huge (125%)", "Massive (150%)" },
               getValue=function()
@@ -689,100 +791,10 @@ initFrame:SetScript("OnEvent", function(self)
                 if EllesmereUI.SetPanelScale then
                     EllesmereUI:SetPanelScale(scale)
                 end
-              end });  y = y - h
+              end }
+        );  y = y - h
 
-        -- Inline color swatch on Active Theme (left region)
-        do
-            local leftRgn = themeRow._leftRegion
-            local function isCustomColorOff()
-                return EllesmereUI.GetActiveTheme() ~= "Custom Color"
-            end
-
-            -- Color swatch (closest to dropdown)
-            local tcGet = function() return EllesmereUI.GetAccentColor() end
-            local tcSet = function(r, g, b) EllesmereUI.SetAccentColor(r, g, b) end
-            local tcSwatch, tcUpdateSwatch = EllesmereUI.BuildColorSwatch(leftRgn, leftRgn:GetFrameLevel() + 5, tcGet, tcSet, nil, 20)
-            PP.Point(tcSwatch, "RIGHT", leftRgn._control, "LEFT", -12, 0)
-            leftRgn._lastInline = tcSwatch
-            EllesmereUI.RegisterWidgetRefresh(function()
-                local off = isCustomColorOff()
-                tcSwatch:SetAlpha(off and 0.15 or 1)
-                tcSwatch:EnableMouse(not off)
-                tcUpdateSwatch()
-            end)
-            tcSwatch:SetAlpha(isCustomColorOff() and 0.15 or 1)
-            tcSwatch:EnableMouse(not isCustomColorOff())
-            tcSwatch:SetScript("OnEnter", function(self)
-                if isCustomColorOff() then
-                    EllesmereUI.ShowWidgetTooltip(self, "This option is only available for the Custom Color Theme")
-                end
-            end)
-            tcSwatch:SetScript("OnLeave", function()
-                EllesmereUI.HideWidgetTooltip()
-            end)
-        end
-
-        _, h = W:DualRow(parent, y,
-            { type="slider", text="UI Scale",
-              min=0.40, max=1.00, step=0.01,
-              tooltip="Sets the scale of the entire game UI. Lower values make everything smaller, higher values make everything larger.",
-              disabled=function() return EllesmereUIDB and EllesmereUIDB.ppFixedScale end,
-              disabledTooltip="Disable 'Set UI Scale to 0.5333' first",
-              getValue=function()
-                if EllesmereUI._uiScaleDragVal then
-                    return EllesmereUI._uiScaleDragVal
-                end
-                return EllesmereUIDB and EllesmereUIDB.ppUIScale or EllesmereUI.PP.PixelBestSize()
-              end,
-              setValue=function(v)
-                if not EllesmereUIDB then EllesmereUIDB = {} end
-                -- Snap 0.53 to exact pixel-perfect 0.5333...
-                if math.abs(v - 0.53) < 0.005 then v = 0.5333333333 end
-                EllesmereUI._uiScaleDragVal = v
-                EllesmereUIDB.ppUIScaleAuto = false
-                -- Snapshot panel scale before changing UIParent
-                local mf = EllesmereUI._mainFrame
-                local panelScaleBefore
-                if mf then panelScaleBefore = mf:GetEffectiveScale() end
-                EllesmereUI.PP.SetUIScale(v)
-                -- Counter-scale panel so it stays visually identical
-                if mf and panelScaleBefore then
-                    local newEff = UIParent:GetEffectiveScale()
-                    if newEff > 0 then mf:SetScale(panelScaleBefore / newEff) end
-                end
-                if not EllesmereUI._uiScaleCleanup then
-                    EllesmereUI._uiScaleCleanup = true
-                    C_Timer.After(0, function()
-                        if not EllesmereUI._sliderDragging then
-                            EllesmereUI._uiScaleDragVal = nil
-                        end
-                        EllesmereUI._uiScaleCleanup = false
-                    end)
-                end
-              end },
-            { type="toggle", text="Set UI Scale to 0.5333",
-              tooltip="This option is for users who use exact pixel perfect scale setting for other addons (EUI does not require this setting to be pixel perfect).",
-              getValue=function()
-                return EllesmereUIDB and EllesmereUIDB.ppFixedScale or false
-              end,
-              setValue=function(v)
-                if not EllesmereUIDB then EllesmereUIDB = {} end
-                EllesmereUIDB.ppFixedScale = v
-                if v then
-                    EllesmereUIDB.ppUIScaleAuto = false
-                    EllesmereUIDB.ppUIScale = 0.5333333333
-                    local mf = EllesmereUI._mainFrame
-                    local panelScaleBefore
-                    if mf then panelScaleBefore = mf:GetEffectiveScale() end
-                    EllesmereUI.PP.SetUIScale(0.5333333333)
-                    if mf and panelScaleBefore then
-                        local newEff = UIParent:GetEffectiveScale()
-                        if newEff > 0 then mf:SetScale(panelScaleBefore / newEff) end
-                    end
-                end
-                EllesmereUI:RefreshPage()
-              end });  y = y - h
-
+        -- Row 3: Show Minimap Button | Hide Pause Menu Button
         _, h = W:DualRow(parent, y,
             { type="toggle", text="Show Minimap Button",
               getValue=function()
@@ -797,18 +809,100 @@ initFrame:SetScript("OnEvent", function(self)
                     EllesmereUI.HideMinimapButton()
                 end
               end },
-            { type="toggle", text="Show Pause Menu Button",
-              tooltip="Shows the EllesmereUI button in the game menu (Escape key).",
+            { type="toggle", text="Hide Pause Menu Button",
+              tooltip="Hides the EllesmereUI button from the game's Escape/pause menu.",
               getValue=function()
-                return not EllesmereUIDB or EllesmereUIDB.hideGameMenuButton ~= true
+                  return EllesmereUIDB and EllesmereUIDB.hideGameMenuButton or false
               end,
               setValue=function(v)
-                if not EllesmereUIDB then EllesmereUIDB = {} end
-                EllesmereUIDB.hideGameMenuButton = not v
-                local btn = _G.EllesmereUI_GameMenuButton
-                if btn then btn:SetShown(v) end
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.hideGameMenuButton = v
               end }
         );  y = y - h
+
+        -- Row 4: Reskin Blizzard Elements | Accent Colored Elements
+        local reskinRow
+        reskinRow, h = W:DualRow(parent, y,
+            { type="toggle", text="Reskin Blizzard Elements",
+              tooltip="Reskins Blizzard tooltips, right-click context menus, and popups with a dark, minimal style matching the EUI aesthetic. Requires reload to apply.",
+              getValue=function()
+                  return not EllesmereUIDB or EllesmereUIDB.customTooltips ~= false
+              end,
+              setValue=function(v)
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.customTooltips = v
+                  if EllesmereUI.ShowConfirmPopup then
+                      EllesmereUI:ShowConfirmPopup({
+                          title       = "Reload Required",
+                          message     = "Reskin setting requires a UI reload to fully apply.",
+                          confirmText = "Reload Now",
+                          cancelText  = "Later",
+                          onConfirm   = function() ReloadUI() end,
+                      })
+                  end
+              end },
+            { type="toggle", text="Accent Colored Elements",
+              tooltip="Recolors headers, arrows, and spell titles in Blizzard tooltips and context menus to match your UI Accent Color.",
+              getValue=function()
+                  return EllesmereUIDB and EllesmereUIDB.accentReskinElements or false
+              end,
+              setValue=function(v)
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.accentReskinElements = v
+              end }
+        );  y = y - h
+        -- Inline cog on Reskin toggle: tooltip sub-settings
+        do
+            local reskinOff = function() return EllesmereUIDB and EllesmereUIDB.customTooltips == false end
+            local leftRgn = reskinRow._leftRegion
+
+            local _, reskinCogShow = EllesmereUI.BuildCogPopup({
+                title = "Tooltip Settings",
+                rows = {
+                    { type="toggle", label="Show Player Titles",
+                      get=function() return EllesmereUIDB and EllesmereUIDB.tooltipPlayerTitles or false end,
+                      set=function(v)
+                          if not EllesmereUIDB then EllesmereUIDB = {} end
+                          EllesmereUIDB.tooltipPlayerTitles = v
+                      end },
+                },
+            })
+
+            local reskinCogBtn = CreateFrame("Button", nil, leftRgn)
+            reskinCogBtn:SetSize(26, 26)
+            reskinCogBtn:SetPoint("RIGHT", leftRgn._lastInline or leftRgn._control, "LEFT", -9, 0)
+            leftRgn._lastInline = reskinCogBtn
+            reskinCogBtn:SetFrameLevel(leftRgn:GetFrameLevel() + 5)
+            reskinCogBtn:SetAlpha(reskinOff() and 0.15 or 0.4)
+            local reskinCogTex = reskinCogBtn:CreateTexture(nil, "OVERLAY")
+            reskinCogTex:SetAllPoints()
+            reskinCogTex:SetTexture(EllesmereUI.COGS_ICON)
+            reskinCogBtn:SetScript("OnEnter", function(self) self:SetAlpha(0.7) end)
+            reskinCogBtn:SetScript("OnLeave", function(self) self:SetAlpha(reskinOff() and 0.15 or 0.4) end)
+            reskinCogBtn:SetScript("OnClick", function(self) reskinCogShow(self) end)
+
+            local reskinCogBlock = CreateFrame("Frame", nil, reskinCogBtn)
+            reskinCogBlock:SetAllPoints()
+            reskinCogBlock:SetFrameLevel(reskinCogBtn:GetFrameLevel() + 10)
+            reskinCogBlock:EnableMouse(true)
+            reskinCogBlock:SetScript("OnEnter", function()
+                EllesmereUI.ShowWidgetTooltip(reskinCogBtn, EllesmereUI.DisabledTooltip("Reskin Blizzard Elements"))
+            end)
+            reskinCogBlock:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
+
+            EllesmereUI.RegisterWidgetRefresh(function()
+                if reskinOff() then
+                    reskinCogBtn:SetAlpha(0.15)
+                    reskinCogBlock:Show()
+                else
+                    reskinCogBtn:SetAlpha(0.4)
+                    reskinCogBlock:Hide()
+                end
+            end)
+
+            reskinCogBtn:SetAlpha(reskinOff() and 0.15 or 0.4)
+            if reskinOff() then reskinCogBlock:Show() else reskinCogBlock:Hide() end
+        end
 
         _, h = W:Spacer(parent, y, 20);  y = y - h
 
@@ -844,11 +938,1598 @@ initFrame:SetScript("OnEvent", function(self)
                 SetCVarSafe("SpellQueueWindow", v)
               end });  y = y - h
 
+        local FCT_FONT_DIR = "Interface\\AddOns\\EllesmereUI\\media\\fonts\\"
+        local fctFontValues = {
+            ["default"]                                = { text = "Blizzard Default", font = "Fonts\\FRIZQT__.TTF" },
+            [FCT_FONT_DIR .. "Expressway.TTF"]         = { text = "Expressway",            font = FCT_FONT_DIR .. "Expressway.TTF" },
+            [FCT_FONT_DIR .. "Avant Garde Naowh.ttf"]        = { text = "Avant Garde (Naowh)",   font = FCT_FONT_DIR .. "Avant Garde Naowh.ttf" },
+            [FCT_FONT_DIR .. "Arial Bold.TTF"]         = { text = "Arial Bold",            font = FCT_FONT_DIR .. "Arial Bold.TTF" },
+            [FCT_FONT_DIR .. "Poppins.ttf"]            = { text = "Poppins",               font = FCT_FONT_DIR .. "Poppins.ttf" },
+            [FCT_FONT_DIR .. "FiraSans Medium.ttf"]    = { text = "Fira Sans Medium",      font = FCT_FONT_DIR .. "FiraSans Medium.ttf" },
+            [FCT_FONT_DIR .. "Arial Narrow.ttf"]       = { text = "Arial Narrow",          font = FCT_FONT_DIR .. "Arial Narrow.ttf" },
+            [FCT_FONT_DIR .. "Changa.ttf"]             = { text = "Changa",                font = FCT_FONT_DIR .. "Changa.ttf" },
+            [FCT_FONT_DIR .. "Cinzel Decorative.ttf"]  = { text = "Cinzel Decorative",     font = FCT_FONT_DIR .. "Cinzel Decorative.ttf" },
+            [FCT_FONT_DIR .. "Exo.otf"]                = { text = "Exo",                   font = FCT_FONT_DIR .. "Exo.otf" },
+            [FCT_FONT_DIR .. "FiraSans Bold.ttf"]      = { text = "Fira Sans Bold",        font = FCT_FONT_DIR .. "FiraSans Bold.ttf" },
+            [FCT_FONT_DIR .. "FiraSans Light.ttf"]     = { text = "Fira Sans Light",       font = FCT_FONT_DIR .. "FiraSans Light.ttf" },
+            [FCT_FONT_DIR .. "Future X Black.otf"]     = { text = "Future X Black",        font = FCT_FONT_DIR .. "Future X Black.otf" },
+            [FCT_FONT_DIR .. "Gotham Narrow Ultra.otf"] = { text = "Gotham Narrow Ultra",  font = FCT_FONT_DIR .. "Gotham Narrow Ultra.otf" },
+            [FCT_FONT_DIR .. "Gotham Narrow.otf"]      = { text = "Gotham Narrow",         font = FCT_FONT_DIR .. "Gotham Narrow.otf" },
+            [FCT_FONT_DIR .. "Russo One.ttf"]          = { text = "Russo One",             font = FCT_FONT_DIR .. "Russo One.ttf" },
+            [FCT_FONT_DIR .. "Ubuntu.ttf"]             = { text = "Ubuntu",                font = FCT_FONT_DIR .. "Ubuntu.ttf" },
+            [FCT_FONT_DIR .. "Homespun.ttf"]           = { text = "Homespun",              font = FCT_FONT_DIR .. "Homespun.ttf" },
+            ["Fonts\\FRIZQT__.TTF"]                    = { text = "Friz Quadrata",         font = "Fonts\\FRIZQT__.TTF" },
+            ["Fonts\\ARIALN.TTF"]                      = { text = "Arial",                 font = "Fonts\\ARIALN.TTF" },
+            ["Fonts\\MORPHEUS.TTF"]                    = { text = "Morpheus",              font = "Fonts\\MORPHEUS.TTF" },
+            ["Fonts\\skurri.ttf"]                      = { text = "Skurri",                font = "Fonts\\skurri.ttf" },
+        }
+        local fctFontOrder = {
+            "default",
+            FCT_FONT_DIR .. "Expressway.TTF",
+            FCT_FONT_DIR .. "Avant Garde Naowh.ttf",
+            FCT_FONT_DIR .. "Arial Bold.TTF",
+            FCT_FONT_DIR .. "Poppins.ttf",
+            FCT_FONT_DIR .. "FiraSans Medium.ttf",
+            "---",
+            FCT_FONT_DIR .. "Arial Narrow.ttf",
+            FCT_FONT_DIR .. "Changa.ttf",
+            FCT_FONT_DIR .. "Cinzel Decorative.ttf",
+            FCT_FONT_DIR .. "Exo.otf",
+            FCT_FONT_DIR .. "FiraSans Bold.ttf",
+            FCT_FONT_DIR .. "FiraSans Light.ttf",
+            FCT_FONT_DIR .. "Future X Black.otf",
+            FCT_FONT_DIR .. "Gotham Narrow Ultra.otf",
+            FCT_FONT_DIR .. "Gotham Narrow.otf",
+            FCT_FONT_DIR .. "Russo One.ttf",
+            FCT_FONT_DIR .. "Ubuntu.ttf",
+            FCT_FONT_DIR .. "Homespun.ttf",
+            "Fonts\\FRIZQT__.TTF",
+            "Fonts\\ARIALN.TTF",
+            "Fonts\\MORPHEUS.TTF",
+            "Fonts\\skurri.ttf",
+        }
+        if EllesmereUI.AppendSharedMediaFonts then
+            EllesmereUI.AppendSharedMediaFonts(fctFontValues, fctFontOrder)
+        end
+        _, h = W:DualRow(parent, y,
+            { type="slider", text="Combat Text Size",
+              min=0.5, max=2.5, step=0.1,
+              getValue=function() return GetCVarNum("WorldTextScale_v2") end,
+              setValue=function(v)
+                v = floor(v * 10 + 0.5) / 10
+                SetCVarSafe("WorldTextScale_v2", v)
+              end },
+            { type="dropdown", text="Combat Text Font",
+              tooltip="WARNING: This feature requires you to re-log or restart WoW to take effect.",
+              tooltipOpts={ color={1, 0.3, 0.3} },
+              values = fctFontValues, order = fctFontOrder,
+              getValue=function()
+                return (EllesmereUIDB and EllesmereUIDB.fctFont) or "default"
+              end,
+              setValue=function(v)
+                if not EllesmereUIDB then EllesmereUIDB = {} end
+                if v == "default" then
+                    EllesmereUIDB.fctFont = nil
+                else
+                    EllesmereUIDB.fctFont = v
+                end
+                EllesmereUI:ShowConfirmPopup({
+                    title   = "Logout Required",
+                    message = "Combat text font changes require a logout to character select to take effect. This is a WoW engine limitation.",
+                    confirmText = "Okay",
+                    cancelText  = "Later",
+                })
+              end });  y = y - h
+
+        local showDmgRow
+        showDmgRow, h = W:DualRow(parent, y,
+            { type="toggle", text="Show Combat Damage Text",
+              getValue=function()
+                return GetCVarBool("floatingCombatTextCombatDamage_v2")
+              end,
+              setValue=function(v)
+                SetCVarSafe("floatingCombatTextCombatDamage_v2", v and "1" or "0")
+                EllesmereUI:RefreshPage()
+              end },
+            { type="toggle", text="Show Combat Healing Text",
+              getValue=function() return GetCVarBool("floatingCombatTextCombatHealing_v2") end,
+              setValue=function(v)
+                SetCVarSafe("floatingCombatTextCombatHealing_v2", v and "1" or "0")
+              end });  y = y - h
+
+        -- Inline cog on "Show Combat Damage Text" left region for pet damage sub-settings
+        do
+            local dmgOff = function() return not GetCVarBool("floatingCombatTextCombatDamage_v2") end
+            local leftRgn = showDmgRow._leftRegion
+
+            local _, dmgCogShow = EllesmereUI.BuildCogPopup({
+                title = "Damage Text Settings",
+                rows = {
+                    { type="toggle", label="Show Periodic Damage",
+                      get=function() return GetCVarBool("floatingCombatTextCombatLogPeriodicSpells_v2") end,
+                      set=function(v) SetCVarSafe("floatingCombatTextCombatLogPeriodicSpells_v2", v and "1" or "0") end },
+                    { type="toggle", label="Show Pet Melee Damage",
+                      get=function() return GetCVarBool("floatingCombatTextPetMeleeDamage_v2") end,
+                      set=function(v) SetCVarSafe("floatingCombatTextPetMeleeDamage_v2", v and "1" or "0") end },
+                    { type="toggle", label="Show Pet Spell Damage",
+                      get=function() return GetCVarBool("floatingCombatTextPetSpellDamage_v2") end,
+                      set=function(v) SetCVarSafe("floatingCombatTextPetSpellDamage_v2", v and "1" or "0") end },
+                },
+            })
+
+            local dmgCogBtn = CreateFrame("Button", nil, leftRgn)
+            dmgCogBtn:SetSize(26, 26)
+            dmgCogBtn:SetPoint("RIGHT", leftRgn._lastInline or leftRgn._control, "LEFT", -9, 0)
+            leftRgn._lastInline = dmgCogBtn
+            dmgCogBtn:SetFrameLevel(leftRgn:GetFrameLevel() + 5)
+            dmgCogBtn:SetAlpha(dmgOff() and 0.15 or 0.4)
+            local dmgCogTex = dmgCogBtn:CreateTexture(nil, "OVERLAY")
+            dmgCogTex:SetAllPoints()
+            dmgCogTex:SetTexture(EllesmereUI.COGS_ICON)
+            dmgCogBtn:SetScript("OnEnter", function(self) self:SetAlpha(0.7) end)
+            dmgCogBtn:SetScript("OnLeave", function(self) self:SetAlpha(dmgOff() and 0.15 or 0.4) end)
+            dmgCogBtn:SetScript("OnClick", function(self) dmgCogShow(self) end)
+
+            local dmgCogBlock = CreateFrame("Frame", nil, dmgCogBtn)
+            dmgCogBlock:SetAllPoints()
+            dmgCogBlock:SetFrameLevel(dmgCogBtn:GetFrameLevel() + 10)
+            dmgCogBlock:EnableMouse(true)
+            dmgCogBlock:SetScript("OnEnter", function()
+                EllesmereUI.ShowWidgetTooltip(dmgCogBtn, EllesmereUI.DisabledTooltip("Show Combat Damage Text"))
+            end)
+            dmgCogBlock:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
+
+            EllesmereUI.RegisterWidgetRefresh(function()
+                if dmgOff() then
+                    dmgCogBtn:SetAlpha(0.15)
+                    dmgCogBlock:Show()
+                else
+                    dmgCogBtn:SetAlpha(0.4)
+                    dmgCogBlock:Hide()
+                end
+            end)
+
+            dmgCogBtn:SetAlpha(dmgOff() and 0.15 or 0.4)
+            if dmgOff() then dmgCogBlock:Show() else dmgCogBlock:Hide() end
+        end
+
         _, h = W:Spacer(parent, y, 20);  y = y - h
 
         -------------------------------------------------------------------
-        --  EXTRAS
+        --  DEVELOPER
         -------------------------------------------------------------------
+        _, h = W:SectionHeader(parent, "DEVELOPER", y);  y = y - h
+
+        _, h = W:DualRow(parent, y,
+            { type="toggle", text="Show Lua Errors In Chat",
+              getValue=function()
+                return EllesmereUIDB and EllesmereUIDB.errorGrabber == true
+              end,
+              setValue=function(v)
+                if not EllesmereUIDB then EllesmereUIDB = {} end
+                EllesmereUIDB.errorGrabber = v
+                if v then
+                    EllesmereUI._enableErrorGrabber()
+                    EllesmereUIDB.suppressErrors = false
+                else
+                    EllesmereUI._disableErrorGrabber()
+                    EllesmereUIDB.suppressErrors = true
+                    SetCVarSafe("scriptErrors", "0")
+                end
+                EllesmereUI:RefreshPage()
+              end },
+            { type="toggle", text="Play Sound on Lua Error",
+              disabled=function()
+                return not (EllesmereUIDB and EllesmereUIDB.errorGrabber == true)
+              end,
+              disabledTooltip="Show Lua Errors In Chat",
+              getValue=function()
+                return EllesmereUIDB and EllesmereUIDB.errorSound or false
+              end,
+              setValue=function(v)
+                if not EllesmereUIDB then EllesmereUIDB = {} end
+                EllesmereUIDB.errorSound = v
+              end });  y = y - h
+
+        _, h = W:DualRow(parent, y,
+            { type="toggle", text="Suppress Lua Errors",
+              disabled=function()
+                return EllesmereUIDB and EllesmereUIDB.errorGrabber == true
+              end,
+              disabledTooltip="Show Lua Errors In Chat",
+              getValue=function()
+                return not (EllesmereUIDB and EllesmereUIDB.suppressErrors == false)
+              end,
+              setValue=function(v)
+                if not EllesmereUIDB then EllesmereUIDB = {} end
+                EllesmereUIDB.suppressErrors = v
+                SetCVarSafe("scriptErrors", v and "0" or "1")
+              end },
+            { type="toggle", text="Show Spell ID on Tooltip",
+              getValue=function()
+                return EllesmereUIDB and EllesmereUIDB.showSpellID or false
+              end,
+              setValue=function(v)
+                if not EllesmereUIDB then EllesmereUIDB = {} end
+                EllesmereUIDB.showSpellID = v
+              end });  y = y - h
+
+        _, h = W:Spacer(parent, y, 20);  y = y - h
+
+        -- Reset ALL EUI Addon Settings (wide warning button)
+        y = y - 30  -- spacer
+        do
+            local BTN_W, BTN_H = 300, 38
+            local lerp = EllesmereUI.lerp
+            local DARK_BG = EllesmereUI.DARK_BG or { r = 0.05, g = 0.07, b = 0.09 }
+            local btn = CreateFrame("Button", nil, parent)
+            btn:SetSize(BTN_W, BTN_H)
+            btn:SetPoint("TOP", parent, "TOP", 0, y)
+            btn:SetFrameLevel(parent:GetFrameLevel() + 5)
+            btn:SetAlpha(0.85)
+            local brd = EllesmereUI.MakeBorder(btn, 0.8, 0.2, 0.2, 0.5, EllesmereUI.PanelPP)
+            local bg = EllesmereUI.SolidTex(btn, "BACKGROUND", DARK_BG.r, DARK_BG.g, DARK_BG.b, 0.92)
+            bg:SetAllPoints()
+            local lbl = EllesmereUI.MakeFont(btn, 13, nil, 0.9, 0.3, 0.3)
+            lbl:SetAlpha(0.7)
+            lbl:SetPoint("CENTER")
+            lbl:SetText("Reset ALL EUI Addon Settings")
+            do
+                local FADE_DUR = 0.1
+                local progress, target = 0, 0
+                local function Apply(t)
+                    lbl:SetTextColor(lerp(0.9, 1, t), lerp(0.3, 0.35, t), lerp(0.3, 0.35, t), lerp(0.7, 1, t))
+                    brd:SetColor(0.8, 0.2, 0.2, lerp(0.5, 0.8, t))
+                end
+                local function OnUpdate(self, elapsed)
+                    local dir = (target == 1) and 1 or -1
+                    progress = progress + dir * (elapsed / FADE_DUR)
+                    if (dir == 1 and progress >= 1) or (dir == -1 and progress <= 0) then
+                        progress = target; self:SetScript("OnUpdate", nil)
+                    end
+                    Apply(progress)
+                end
+                btn:SetScript("OnEnter", function(self) target = 1; self:SetScript("OnUpdate", OnUpdate) end)
+                btn:SetScript("OnLeave", function(self) target = 0; self:SetScript("OnUpdate", OnUpdate) end)
+            end
+            btn:SetScript("OnClick", function()
+                EllesmereUI:ShowConfirmPopup({
+                    title       = "Reset ALL Settings",
+                    message     = "Are you sure you want to reset ALL EUI addon settings to their defaults? This will reload your UI.",
+                    disclaimer  = "This resets every EUI addon, not just the current one.",
+                    confirmText = "Reset All & Reload",
+                    cancelText  = "Cancel",
+                    onConfirm   = function()
+                        -- Nuclear wipe: same logic as the beta-exit popup
+                        local svNames = {
+                            "EllesmereUIActionBarsDB",
+                            "EllesmereUIAuraBuffRemindersDB",
+                            "EllesmereUIBasicsDB",
+                            "EllesmereUICooldownManagerDB",
+                            "EllesmereUINameplatesDB",
+                            "EllesmereUIResourceBarsDB",
+                            "EllesmereUIUnitFramesDB",
+                        }
+                        for _, name in ipairs(svNames) do
+                            _G[name] = {}
+                        end
+                        local oldScale = EllesmereUIDB and EllesmereUIDB.ppUIScale
+                        local oldScaleAuto = EllesmereUIDB and EllesmereUIDB.ppUIScaleAuto
+                        local resetVer = EllesmereUIDB and EllesmereUIDB._resetVersion
+                        -- Preserve friend group data across reset
+                        local oldGlobal = EllesmereUIDB and EllesmereUIDB.global
+                        local savedFriends
+                        if oldGlobal then
+                            savedFriends = {
+                                friendGroups = oldGlobal.friendGroups,
+                                friendAssignments = oldGlobal.friendAssignments,
+                                friendGroupOrder = oldGlobal.friendGroupOrder,
+                                friendGroupColors = oldGlobal.friendGroupColors,
+                                friendNotes = oldGlobal.friendNotes,
+                                friendFavCollapsed = oldGlobal.friendFavCollapsed,
+                                friendPendingCollapsed = oldGlobal.friendPendingCollapsed,
+                                friendUngroupedCollapsed = oldGlobal.friendUngroupedCollapsed,
+                            }
+                        end
+                        -- Preserve QoL settings (stored on EllesmereUIDB root)
+                        local qolKeys = {
+                            "autoOpenContainers", "autoSellJunk", "autoRepair",
+                            "autoRepairGuild", "hideScreenshotStatus", "autoUnwrapCollections",
+                            "trainAllButton", "ahCurrentExpansion", "quickLoot",
+                            "autoFillDelete", "skipCinematics", "skipCinematicsAuto",
+                            "sortByMythicScore", "autoInsertKeystone", "quickSignup",
+                            "persistSignupNote", "hideBlizzardPartyFrame",
+                            "instanceResetAnnounce", "instanceResetAnnounceMsg",
+                            "healthMacroEnabled", "healthMacroPrio1", "healthMacroPrio2",
+                            "healthMacroPrio3", "foodMacroEnabled", "macroFactory",
+                        }
+                        local savedQoL = {}
+                        for _, k in ipairs(qolKeys) do
+                            if EllesmereUIDB[k] ~= nil then
+                                savedQoL[k] = EllesmereUIDB[k]
+                            end
+                        end
+                        _G["EllesmereUIDB"] = { _resetVersion = resetVer }
+                        EllesmereUIDB = _G["EllesmereUIDB"]
+                        if oldScale then EllesmereUIDB.ppUIScale = oldScale end
+                        if oldScaleAuto ~= nil then EllesmereUIDB.ppUIScaleAuto = oldScaleAuto end
+                        if savedFriends then
+                            if not EllesmereUIDB.global then EllesmereUIDB.global = {} end
+                            for k, v in pairs(savedFriends) do
+                                EllesmereUIDB.global[k] = v
+                            end
+                        end
+                        for k, v in pairs(savedQoL) do
+                            EllesmereUIDB[k] = v
+                        end
+                        ReloadUI()
+                    end,
+                })
+            end)
+            y = y - BTN_H
+        end
+
+        return math.abs(y)
+    end
+
+    ---------------------------------------------------------------------------
+    --  Quick Setup page  (curated quick-access to key settings per addon)
+    --  Action Bars options are live; others are temporary placeholders
+    --  until those addons register their core settings.
+    ---------------------------------------------------------------------------
+    local function BuildCoreOptionsPage(pageName, parent, yOffset)
+        local W = EllesmereUI.Widgets
+        local y = yOffset
+        local _, h
+
+        -------------------------------------------------------------------
+        --  ACTION BARS
+        -------------------------------------------------------------------
+        _, h = W:SectionHeader(parent, "ACTION BARS", y);  y = y - h
+
+        -- Access EAB through addon registry
+        local EAB = EllesmereUI.Lite and EllesmereUI.Lite.GetAddon("EllesmereUIActionBars", true)
+        local function EAB_db()
+            if EAB and EAB.db then return EAB.db.profile end
+            return nil
+        end
+
+        _, h = W:Toggle(parent, "Modern Icons", y,
+            function()
+                local db = EAB_db()
+                return db and db.squareIcons or false
+            end,
+            function(v)
+                local db = EAB_db()
+                if not db then return end
+                db.squareIcons = v
+                if EAB and EAB.ApplyShapes then EAB:ApplyShapes() end
+                if EAB and EAB.ApplyBorders then EAB:ApplyBorders() end
+            end);  y = y - h
+
+        _, h = W:Slider(parent, "Icon Zoom", y, 0, 10, 0.5,
+            function()
+                local db = EAB_db()
+                return db and (db.iconZoom or 5.5) or 5.5
+            end,
+            function(v)
+                local db = EAB_db()
+                if not db then return end
+                db.iconZoom = v
+                if EAB and EAB.ApplyBorders then
+                    EAB:ApplyBorders()
+                end
+                if EAB and EAB.ApplyShapes then
+                    EAB:ApplyShapes()
+                end
+            end);  y = y - h
+
+        _, h = W:Spacer(parent, y, 20);  y = y - h
+
+        -------------------------------------------------------------------
+        --  NAMEPLATES
+        -------------------------------------------------------------------
+        _, h = W:SectionHeader(parent, "NAMEPLATES", y);  y = y - h
+
+        _, h = W:Toggle(parent, "TEMPORARY", y,
+            function() return false end,
+            function(v) end);  y = y - h
+
+        _, h = W:Spacer(parent, y, 20);  y = y - h
+
+        -------------------------------------------------------------------
+        --  UNIT FRAMES
+        -------------------------------------------------------------------
+        _, h = W:SectionHeader(parent, "UNIT FRAMES", y);  y = y - h
+
+        _, h = W:Toggle(parent, "TEMPORARY", y,
+            function() return false end,
+            function(v) end);  y = y - h
+
+        _, h = W:Spacer(parent, y, 20);  y = y - h
+
+        -------------------------------------------------------------------
+        --  BAR GLOWS
+        -------------------------------------------------------------------
+        _, h = W:SectionHeader(parent, "BAR GLOWS", y);  y = y - h
+
+        _, h = W:Toggle(parent, "TEMPORARY", y,
+            function() return false end,
+            function(v) end);  y = y - h
+
+        _, h = W:Spacer(parent, y, 20);  y = y - h
+
+        -------------------------------------------------------------------
+        --  CONSUMABLES
+        -------------------------------------------------------------------
+        _, h = W:SectionHeader(parent, "CONSUMABLES", y);  y = y - h
+
+        _, h = W:Toggle(parent, "TEMPORARY", y,
+            function() return false end,
+            function(v) end);  y = y - h
+
+        _, h = W:Spacer(parent, y, 20);  y = y - h
+
+        -------------------------------------------------------------------
+        --  CURSOR CIRCLE
+        -------------------------------------------------------------------
+        _, h = W:SectionHeader(parent, "CURSOR CIRCLE", y);  y = y - h
+
+        _, h = W:Toggle(parent, "TEMPORARY", y,
+            function() return false end,
+            function(v) end);  y = y - h
+
+        _, h = W:Spacer(parent, y, 20);  y = y - h
+
+        -------------------------------------------------------------------
+        --  BEACON REMINDERS
+        -------------------------------------------------------------------
+        _, h = W:SectionHeader(parent, "BEACON REMINDERS", y);  y = y - h
+
+        _, h = W:Toggle(parent, "TEMPORARY", y,
+            function() return false end,
+            function(v) end);  y = y - h
+
+        return math.abs(y)
+    end
+
+    ---------------------------------------------------------------------------
+    --  Re-read live CVar values every time the panel is opened.
+    --  Widgets call their getter on each build, so a page rebuild is enough
+    --  to pick up any CVar changes made externally (other addons, /console).
+    ---------------------------------------------------------------------------
+    EllesmereUI:RegisterOnShow(function()
+        if EllesmereUI:GetActiveModule() == GLOBAL_KEY then
+            EllesmereUI:RefreshPage()
+        end
+    end)
+
+    ---------------------------------------------------------------------------
+    --  Register the module
+    ---------------------------------------------------------------------------
+
+    ---------------------------------------------------------------------------
+    --  Colors Page
+    ---------------------------------------------------------------------------
+    local CLASS_ORDER = {
+        "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST",
+        "DEATHKNIGHT", "SHAMAN", "MAGE", "WARLOCK", "MONK",
+        "DRUID", "DEMONHUNTER", "EVOKER",
+    }
+    local CLASS_LABELS = {
+        WARRIOR = "Warrior", PALADIN = "Paladin", HUNTER = "Hunter",
+        ROGUE = "Rogue", PRIEST = "Priest", DEATHKNIGHT = "Death Knight",
+        SHAMAN = "Shaman", MAGE = "Mage", WARLOCK = "Warlock",
+        MONK = "Monk", DRUID = "Druid", DEMONHUNTER = "Demon Hunter",
+        EVOKER = "Evoker",
+    }
+    local POWER_LABELS = {
+        MANA = "Mana", RAGE = "Rage", FOCUS = "Focus", ENERGY = "Energy",
+        RUNIC_POWER = "Runic Power", LUNAR_POWER = "Lunar Power",
+        INSANITY = "Insanity", MAELSTROM = "Maelstrom", FURY = "Fury",
+        PAIN = "Pain",
+    }
+    local RESOURCE_LABELS = {
+        ComboPoints = "Combo Points", HolyPower = "Holy Power",
+        Chi = "Chi", SoulShards = "Soul Shards",
+        ArcaneCharges = "Arcane Charges", Essence = "Essence",
+        Runes = "Runes",
+        SoulFragments = "Soul Fragments",
+    }
+    local GRADIENT_DIR_VALUES = {
+        ["HORIZONTAL"] = "Left to Right",
+        ["HORIZONTAL_REV"] = "Right to Left",
+        ["VERTICAL"] = "Top to Bottom",
+        ["VERTICAL_REV"] = "Bottom to Top",
+    }
+    local GRADIENT_DIR_ORDER = { "HORIZONTAL", "HORIZONTAL_REV", "VERTICAL", "VERTICAL_REV" }
+
+    local function BuildColorsPage(pageName, parent, yOffset)
+        local W = EllesmereUI.Widgets
+        local y = yOffset
+        local _, h
+        local MakeFont = EllesmereUI.MakeFont
+        local GetCustomColorsDB = EllesmereUI.GetCustomColorsDB
+        local CLASS_COLOR_MAP = EllesmereUI.CLASS_COLOR_MAP
+        local DEFAULT_POWER_COLORS = EllesmereUI.DEFAULT_POWER_COLORS
+        local CONTENT_PAD = EllesmereUI.CONTENT_PAD or 20
+
+        parent._showRowDivider = true
+
+        -- Helper to save a color entry
+        local function SaveColorEntry(category, key, data)
+            local db = GetCustomColorsDB()
+            if not db[category] then db[category] = {} end
+            db[category][key] = data
+            EllesmereUI.ApplyColorsToOUF()
+        end
+
+        -------------------------------------------------------------------
+        --  Shared 4-column color grid builder
+        -------------------------------------------------------------------
+        local GRID_COLS     = 4
+        local GRID_ROW_H    = 50
+        local GRID_PAD      = CONTENT_PAD
+        local GRID_SIDE_PAD = 20
+        local SWATCH_SZ     = 20
+
+        -- items = { { label, classToken, getColor, setColor, resetFn }, ... }
+        local function BuildColorGrid(par, yPos, items)            local totalRows = math.ceil(#items / GRID_COLS)
+            local totalW = par:GetWidth() - GRID_PAD * 2
+            local colW = math.floor(totalW / GRID_COLS)
+
+            for row = 0, totalRows - 1 do
+                local rowFrame = CreateFrame("Frame", nil, par)
+                PP.Size(rowFrame, totalW, GRID_ROW_H)
+                PP.Point(rowFrame, "TOPLEFT", par, "TOPLEFT", GRID_PAD, yPos - row * GRID_ROW_H)
+                rowFrame._skipRowDivider = true
+                EllesmereUI.RowBg(rowFrame, par)
+
+                -- Column dividers
+                for d = 1, GRID_COLS - 1 do
+                    local div = rowFrame:CreateTexture(nil, "ARTWORK")
+                    div:SetColorTexture(1, 1, 1, 0.06)
+                    if div.SetSnapToPixelGrid then div:SetSnapToPixelGrid(false); div:SetTexelSnappingBias(0) end
+                    div:SetWidth(1)
+                    local xPos = d * colW
+                    PP.Point(div, "TOP", rowFrame, "TOPLEFT", xPos, 0)
+                    PP.Point(div, "BOTTOM", rowFrame, "BOTTOMLEFT", xPos, 0)
+                end
+
+                for col = 0, GRID_COLS - 1 do
+                    local idx = row * GRID_COLS + col + 1
+                    local item = items[idx]
+                    if not item then break end
+
+                    local cell = CreateFrame("Frame", nil, rowFrame)
+                    cell:SetSize(colW, GRID_ROW_H)
+                    cell:SetPoint("TOPLEFT", rowFrame, "TOPLEFT", col * colW, 0)
+
+                    -- Class-colored label (or white for power colors)
+                    local cr, cg, cb = 1, 1, 1
+                    if item.classToken then
+                        local cc = RAID_CLASS_COLORS and RAID_CLASS_COLORS[item.classToken]
+                        if cc then cr, cg, cb = cc.r, cc.g, cc.b end
+                    end
+                    local label = MakeFont(cell, 13, nil, cr, cg, cb)
+                    label:SetPoint("LEFT", cell, "LEFT", GRID_SIDE_PAD, 0)
+                    label:SetText(item.label)
+
+                    -- Color swatch (right side)
+                    local swatch, updateSwatch = EllesmereUI.BuildColorSwatch(cell, cell:GetFrameLevel() + 2,
+                        function()
+                            local c = item.getColor()
+                            return c.r, c.g, c.b, 1
+                        end,
+                        function(r, g, b)
+                            local c = item.getColor()
+                            c.r = r; c.g = g; c.b = b
+                            item.setColor(c)
+                            local rl = EllesmereUI._widgetRefreshList
+                            if rl then for i2 = 1, #rl do rl[i2]() end end
+                        end, false, SWATCH_SZ)
+                    swatch:SetPoint("RIGHT", cell, "RIGHT", -GRID_SIDE_PAD, 0)
+
+                    -- Undo (reset) button
+                    local undoBtn = CreateFrame("Button", nil, cell)
+                    undoBtn:SetSize(18, 18)
+                    undoBtn:SetPoint("RIGHT", swatch, "LEFT", -10, 0)
+                    undoBtn:SetFrameLevel(cell:GetFrameLevel() + 3)
+                    undoBtn:SetAlpha(0.3)
+                    local undoTex = undoBtn:CreateTexture(nil, "ARTWORK")
+                    undoTex:SetAllPoints()
+                    undoTex:SetTexture(EllesmereUI.UNDO_ICON)
+                    undoBtn:SetScript("OnEnter", function(self)
+                        self:SetAlpha(0.6)
+                        EllesmereUI.ShowWidgetTooltip(self, "Reset to default")
+                    end)
+                    undoBtn:SetScript("OnLeave", function(self)
+                        self:SetAlpha(0.3)
+                        EllesmereUI.HideWidgetTooltip()
+                    end)
+                    undoBtn:SetScript("OnClick", function()
+                        item.resetFn()
+                        EllesmereUI.ApplyColorsToOUF()
+                        updateSwatch()
+                        local rl = EllesmereUI._widgetRefreshList
+                        if rl then for i2 = 1, #rl do rl[i2]() end end
+                    end)
+                end
+            end
+
+            return totalRows * GRID_ROW_H
+        end
+
+        -------------------------------------------------------------------
+        --  FONTS section
+        -------------------------------------------------------------------
+        _, h = W:SectionHeader(parent, "FONTS", y);  y = y - h
+
+        -- For locales that require system fonts (CJK, Cyrillic), the font
+        -- selection dropdowns are not applicable -- the system font is used
+        -- automatically regardless of what is selected here.
+        if EllesmereUI.LOCALE_FONT_FALLBACK then
+            local noticeFrame = CreateFrame("Frame", nil, parent)
+            local totalW = parent:GetWidth() - EllesmereUI.CONTENT_PAD * 2
+            PP.Size(noticeFrame, totalW, 70)
+            PP.Point(noticeFrame, "TOPLEFT", parent, "TOPLEFT", EllesmereUI.CONTENT_PAD, y)
+            EllesmereUI.RowBg(noticeFrame, parent)
+
+            local icon = noticeFrame:CreateTexture(nil, "ARTWORK")
+            icon:SetTexture("Interface\\DialogFrame\\UI-Dialog-Icon-AlertOther")
+            PP.Size(icon, 24, 24)
+            PP.Point(icon, "LEFT", noticeFrame, "LEFT", 16, 0)
+            icon:SetVertexColor(EllesmereUI.ELLESMERE_GREEN.r, EllesmereUI.ELLESMERE_GREEN.g, EllesmereUI.ELLESMERE_GREEN.b)
+
+            local msg = noticeFrame:CreateFontString(nil, "OVERLAY")
+            msg:SetFont(EllesmereUI.EXPRESSWAY, 13, EllesmereUI.GetFontOutlineFlag())
+            msg:SetTextColor(1, 1, 1, 0.75)
+            msg:SetJustifyH("LEFT")
+            msg:SetPoint("LEFT", icon, "RIGHT", 12, 4)
+            msg:SetPoint("RIGHT", noticeFrame, "RIGHT", -16, 0)
+            msg:SetText("Your game client language uses a system font automatically.\nFont selection is not available for this locale.")
+
+            y = y - 70
+            return math.abs(y)
+        end
+
+        local fontDropValues = {}
+        local fontDropOrder  = {}
+        local FONT_DIR_GLOBAL = EllesmereUI.MEDIA_PATH .. "fonts\\"
+        for _, name in ipairs(EllesmereUI.FONT_ORDER) do
+            if name == "---" then
+                fontDropOrder[#fontDropOrder + 1] = "---"
+            else
+                local path = EllesmereUI.FONT_BLIZZARD[name]
+                    or (FONT_DIR_GLOBAL .. (EllesmereUI.FONT_FILES[name] or "Expressway.TTF"))
+                local displayName = (EllesmereUI.FONT_DISPLAY_NAMES and EllesmereUI.FONT_DISPLAY_NAMES[name]) or name
+                fontDropValues[name] = { text = displayName, font = path }
+                fontDropOrder[#fontDropOrder + 1] = name
+            end
+        end
+        if EllesmereUI.AppendSharedMediaFonts then
+            EllesmereUI.AppendSharedMediaFonts(fontDropValues, fontDropOrder, { keyByName = true })
+        end
+
+
+        -- Reload popup for font changes
+        local function FontReload()
+            EllesmereUI:ShowConfirmPopup({
+                title       = "Reload Required",
+                message     = "Font changed. A UI reload is needed to apply the new font.",
+                confirmText = "Reload Now",
+                cancelText  = "Later",
+                onConfirm   = function() ReloadUI() end,
+            })
+        end
+
+        local outlineModeValues = {
+            ["none"]    = { text = "Drop Shadow" },
+            ["outline"] = { text = "Outline" },
+            ["thick"]   = { text = "Thick Outline" },
+        }
+        local outlineModeOrder = { "none", "outline", "thick" }
+
+        _, h = W:DualRow(parent, y,
+            { type="dropdown", text="Global Font",
+              values=fontDropValues, order=fontDropOrder,
+              getValue=function() return EllesmereUI.GetFontsDB().global or "Expressway" end,
+              setValue=function(v)
+                  EllesmereUI.GetFontsDB().global = v
+                  local rl = EllesmereUI._widgetRefreshList
+                  if rl then for i2 = 1, #rl do rl[i2]() end end
+                  FontReload()
+              end },
+            { type="dropdown", text="Outline Mode",
+              tooltip="Controls the text rendering style used across all UI elements",
+              values=outlineModeValues, order=outlineModeOrder,
+              getValue=function()
+                  local v = EllesmereUI.GetFontsDB().outlineMode or "none"
+                  if v == "shadow" then v = "none" end
+                  return v
+              end,
+              setValue=function(v)
+                  EllesmereUI.GetFontsDB().outlineMode = v
+                  local rl = EllesmereUI._widgetRefreshList
+                  if rl then for i2 = 1, #rl do rl[i2]() end end
+                  FontReload()
+              end });  y = y - h
+
+        _, h = W:Spacer(parent, y, 20);  y = y - h
+
+        -------------------------------------------------------------------
+        --  CLASS COLORS section
+        -------------------------------------------------------------------
+        _, h = W:SectionHeader(parent, "CLASS COLORS", y);  y = y - h
+
+        local classItems = {}
+        for _, token in ipairs(CLASS_ORDER) do
+            local lbl = CLASS_LABELS[token]
+            local def = CLASS_COLOR_MAP[token] or { r = 1, g = 1, b = 1 }
+            classItems[#classItems + 1] = {
+                label = lbl,
+                classToken = token,
+                getColor = function()
+                    local db = GetCustomColorsDB()
+                    if db.class and db.class[token] then return db.class[token] end
+                    return { r = def.r, g = def.g, b = def.b }
+                end,
+                setColor = function(c)
+                    SaveColorEntry("class", token, c)
+                end,
+                resetFn = function()
+                    local db = GetCustomColorsDB()
+                    if db.class then db.class[token] = nil end
+                end,
+            }
+        end
+
+        h = BuildColorGrid(parent, y, classItems)
+        y = y - h
+
+        _, h = W:Spacer(parent, y, 20);  y = y - h
+
+        -------------------------------------------------------------------
+        --  POWER COLORS section
+        -------------------------------------------------------------------
+        _, h = W:SectionHeader(parent, "POWER COLORS", y);  y = y - h
+
+        local POWER_ORDER = { "MANA", "RAGE", "FOCUS", "ENERGY", "RUNIC_POWER", "FURY" }
+        local powerItems = {}
+        for _, pk in ipairs(POWER_ORDER) do
+            local lbl = POWER_LABELS[pk] or pk
+            local def = DEFAULT_POWER_COLORS[pk] or { r = 1, g = 1, b = 1 }
+            powerItems[#powerItems + 1] = {
+                label = lbl,
+                classToken = nil,
+                getColor = function()
+                    local db = GetCustomColorsDB()
+                    if db.power and db.power[pk] then return db.power[pk] end
+                    return { r = def.r, g = def.g, b = def.b }
+                end,
+                setColor = function(c)
+                    SaveColorEntry("power", pk, c)
+                end,
+                resetFn = function()
+                    EllesmereUI.ResetPowerColor(pk)
+                end,
+            }
+        end
+
+        h = BuildColorGrid(parent, y, powerItems)
+        y = y - h
+
+        _, h = W:Spacer(parent, y, 20);  y = y - h
+
+        return math.abs(y)
+    end
+
+
+    ---------------------------------------------------------------------------
+    --  Runtime: FPS Counter (Extras)
+    ---------------------------------------------------------------------------
+    -- Guard: only one addon copy creates these runtime frames
+    if not _G["EUI_ExtrasRuntimeInit"] then
+    _G["EUI_ExtrasRuntimeInit"] = true
+
+    local fpsFrame
+    local function CreateFPSCounter()
+        if fpsFrame then return end
+        local FONT = EllesmereUI.GetFontPath("extras")
+        local FONT_SIZE = (EllesmereUIDB and EllesmereUIDB.fpsTextSize) or 12
+        local LABEL_SIZE = FONT_SIZE - 2
+        local SHADOW_X, SHADOW_Y = 1, -1
+        fpsFrame = CreateFrame("Frame", "EUI_FPSCounter", UIParent)
+        fpsFrame:SetSize(60, 20)
+        fpsFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 10, -10)
+        fpsFrame:SetFrameStrata("HIGH")
+        fpsFrame:SetFrameLevel(100)
+        fpsFrame:EnableMouse(false)
+
+        local function MakeFS(size)
+            local f = fpsFrame:CreateFontString(nil, "OVERLAY")
+            f:SetFont(FONT, size, EllesmereUI.GetFontOutlineFlag())
+            if EllesmereUI.GetFontUseShadow() then f:SetShadowOffset(SHADOW_X, SHADOW_Y) else f:SetShadowOffset(0, 0) end
+            f:SetTextColor(1, 1, 1, 1)
+            return f
+        end
+
+        local fsFps = MakeFS(FONT_SIZE)
+        fsFps:SetPoint("LEFT")
+        fpsFrame._text = fsFps
+
+        -- Divider helper
+        local DIV_W, DIV_H = 1, 10
+        local DIV_PAD = 6
+
+        local function MakeDivider()
+            local d = fpsFrame:CreateTexture(nil, "OVERLAY")
+            d:SetColorTexture(1, 1, 1, 0.25)
+            d:SetSize(DIV_W, DIV_H)
+            return d
+        end
+
+        local divWorld = MakeDivider()
+        local fsWorldVal = MakeFS(FONT_SIZE)
+        local fsWorldLbl = MakeFS(LABEL_SIZE)
+        fpsFrame._divWorld = divWorld
+        fpsFrame._textWorld = fsWorldVal
+
+        local divLocal = MakeDivider()
+        local fsLocalVal = MakeFS(FONT_SIZE)
+        local fsLocalLbl = MakeFS(LABEL_SIZE)
+        fpsFrame._divLocal = divLocal
+        fpsFrame._textLocal = fsLocalVal
+
+        local function UpdateFPS(self)
+            local db = EllesmereUIDB or {}
+            local c = db.fpsColor
+            local cr, cg, cb, ca = 1, 1, 1, 1
+            if c then cr, cg, cb, ca = c.r or 1, c.g or 1, c.b or 1, c.a or 1 end
+            fsFps:SetTextColor(cr, cg, cb, ca)
+            fsWorldVal:SetTextColor(cr, cg, cb, ca)
+            fsWorldLbl:SetTextColor(cr, cg, cb, ca * 0.6)
+            fsLocalVal:SetTextColor(cr, cg, cb, ca)
+            fsLocalLbl:SetTextColor(cr, cg, cb, ca * 0.6)
+            divWorld:SetColorTexture(cr, cg, cb, ca * 0.35)
+            divLocal:SetColorTexture(cr, cg, cb, ca * 0.35)
+
+            local fps = floor(GetFramerate() + 0.5)
+            fsFps:SetText(fps .. " fps")
+
+            local showWorld = db.fpsShowWorldMS
+            local showLocal = (db.fpsShowLocalMS == nil) and true or db.fpsShowLocalMS
+            local _, _, latHome, latWorld = GetNetStats()
+
+            -- Layout: [FPS] [div] [world ms (world)] [div] [local ms (local)]
+            fsFps:ClearAllPoints()
+            fsFps:SetPoint("LEFT", fpsFrame, "LEFT", 0, 0)
+            local anchor = fsFps
+
+            if showWorld then
+                fsWorldVal:SetText(latWorld .. " ms")
+                fsWorldLbl:SetText("(world)")
+                divWorld:ClearAllPoints()
+                divWorld:SetPoint("LEFT", anchor, "RIGHT", DIV_PAD, 0)
+                divWorld:Show()
+                fsWorldVal:ClearAllPoints()
+                fsWorldVal:SetPoint("LEFT", divWorld, "RIGHT", DIV_PAD, 0)
+                fsWorldVal:Show()
+                fsWorldLbl:ClearAllPoints()
+                fsWorldLbl:SetPoint("LEFT", fsWorldVal, "RIGHT", 3, 0)
+                fsWorldLbl:Show()
+                anchor = fsWorldLbl
+            else
+                divWorld:Hide(); fsWorldVal:Hide(); fsWorldLbl:Hide()
+            end
+
+            if showLocal then
+                fsLocalVal:SetText(latHome .. " ms")
+                fsLocalLbl:SetText("(local)")
+                divLocal:ClearAllPoints()
+                divLocal:SetPoint("LEFT", anchor, "RIGHT", DIV_PAD, 0)
+                divLocal:Show()
+                fsLocalVal:ClearAllPoints()
+                fsLocalVal:SetPoint("LEFT", divLocal, "RIGHT", DIV_PAD, 0)
+                fsLocalVal:Show()
+                fsLocalLbl:ClearAllPoints()
+                fsLocalLbl:SetPoint("LEFT", fsLocalVal, "RIGHT", 3, 0)
+                fsLocalLbl:Show()
+                anchor = fsLocalLbl
+            else
+                divLocal:Hide(); fsLocalVal:Hide(); fsLocalLbl:Hide()
+            end
+
+            -- Resize frame to fit content
+            local totalW = fsFps:GetStringWidth()
+            if showWorld then totalW = totalW + DIV_PAD + DIV_W + DIV_PAD + fsWorldVal:GetStringWidth() + 3 + fsWorldLbl:GetStringWidth() end
+            if showLocal then totalW = totalW + DIV_PAD + DIV_W + DIV_PAD + fsLocalVal:GetStringWidth() + 3 + fsLocalLbl:GetStringWidth() end
+            self:SetSize(totalW + 4, 20)
+        end
+
+        local elapsed = 0
+        fpsFrame:SetScript("OnUpdate", function(self, dt)
+            elapsed = elapsed + dt
+            if elapsed < 1 then return end
+            elapsed = 0
+            UpdateFPS(self)
+        end)
+        fpsFrame._updateNow = function() elapsed = 0; UpdateFPS(fpsFrame) end
+        fpsFrame:Hide()
+    end
+
+    EllesmereUI._applyFPSCounter = function()
+        local shouldShow = EllesmereUIDB and EllesmereUIDB.showFPS
+        if shouldShow then
+            CreateFPSCounter()
+            -- Re-apply text size from DB
+            local sz = (EllesmereUIDB and EllesmereUIDB.fpsTextSize) or 12
+            local lblSz = sz - 2
+            local fp = EllesmereUI.GetFontPath("extras")
+            local outF = EllesmereUI.GetFontOutlineFlag()
+            if fpsFrame._text then fpsFrame._text:SetFont(fp, sz, outF) end
+            if fpsFrame._textWorld then fpsFrame._textWorld:SetFont(fp, sz, outF) end
+            if fpsFrame._textLocal then fpsFrame._textLocal:SetFont(fp, sz, outF) end
+            if fpsFrame._lblWorld then fpsFrame._lblWorld:SetFont(fp, lblSz, outF) end
+            if fpsFrame._lblLocal then fpsFrame._lblLocal:SetFont(fp, lblSz, outF) end
+            -- Apply saved position and scale
+            local pos = EllesmereUIDB and EllesmereUIDB.fpsPos
+            if pos and pos.point then
+                if pos.scale then pcall(function() fpsFrame:SetScale(pos.scale) end) end
+                fpsFrame:ClearAllPoints()
+                fpsFrame:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 0)
+            end
+            fpsFrame._updateNow()
+            fpsFrame:Show()
+        elseif fpsFrame then
+            fpsFrame:Hide()
+        end
+    end
+
+    -- Register FPS counter as an unlock mode element
+    C_Timer.After(1.5, function()
+        if not EllesmereUI or not EllesmereUI.RegisterUnlockElements then return end
+        local MK = EllesmereUI.MakeUnlockElement
+        EllesmereUI:RegisterUnlockElements({
+            MK({
+                key = "EUI_FPS",
+                label = "FPS Counter",
+                group = "General",
+                order = 700,
+                getFrame = function()
+                    if not fpsFrame then CreateFPSCounter() end
+                    return fpsFrame
+                end,
+                getSize = function()
+                    if fpsFrame then return fpsFrame:GetWidth(), fpsFrame:GetHeight() end
+                    return 80, 20
+                end,
+                noResize = true,
+                savePos = function(key, point, relPoint, x, y)
+                    if not EllesmereUIDB then EllesmereUIDB = {} end
+                    if not point then return end
+                    EllesmereUIDB.fpsPos = { point = point, relPoint = relPoint, x = x, y = y }
+                    if fpsFrame and not EllesmereUI._unlockActive then
+                        fpsFrame:ClearAllPoints()
+                        fpsFrame:SetPoint(point, UIParent, relPoint or point, x or 0, y or 0)
+                    end
+                end,
+                loadPos = function()
+                    return EllesmereUIDB and EllesmereUIDB.fpsPos
+                end,
+                clearPos = function()
+                    if EllesmereUIDB then EllesmereUIDB.fpsPos = nil end
+                end,
+                applyPos = function()
+                    if not fpsFrame then return end
+                    local pos = EllesmereUIDB and EllesmereUIDB.fpsPos
+                    if pos and pos.point then
+                        fpsFrame:ClearAllPoints()
+                        fpsFrame:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 0)
+                    end
+                end,
+            }),
+        })
+    end)
+
+    -- Register Secondary Stats as an unlock mode element
+    C_Timer.After(1.5, function()
+        if not EllesmereUI or not EllesmereUI.RegisterUnlockElements then return end
+        local MK = EllesmereUI.MakeUnlockElement
+        EllesmereUI:RegisterUnlockElements({
+            MK({
+                key = "EUI_SecondaryStats",
+                label = "Secondary Stats",
+                group = "General",
+                order = 710,
+                getFrame = function()
+                    local f = EllesmereUI._getSecondaryStatsFrame and EllesmereUI._getSecondaryStatsFrame()
+                    return f
+                end,
+                getSize = function()
+                    local f = EllesmereUI._getSecondaryStatsFrame and EllesmereUI._getSecondaryStatsFrame()
+                    if f then return f:GetWidth(), f:GetHeight() end
+                    return 160, 60
+                end,
+                noResize = true,
+                savePos = function(key, point, relPoint, x, y)
+                    if not EllesmereUIDB then EllesmereUIDB = {} end
+                    if not point then return end
+                    EllesmereUIDB.secondaryStatsPos = { point = point, relPoint = relPoint, x = x, y = y }
+                    if not EllesmereUI._unlockActive then
+                        local f = EllesmereUI._getSecondaryStatsFrame and EllesmereUI._getSecondaryStatsFrame()
+                        if f then
+                            f:ClearAllPoints()
+                            f:SetPoint(point, UIParent, relPoint or point, x or 0, y or 0)
+                        end
+                    end
+                end,
+                loadPos = function()
+                    return EllesmereUIDB and EllesmereUIDB.secondaryStatsPos
+                end,
+                clearPos = function()
+                    if EllesmereUIDB then EllesmereUIDB.secondaryStatsPos = nil end
+                end,
+                applyPos = function()
+                    local f = EllesmereUI._getSecondaryStatsFrame and EllesmereUI._getSecondaryStatsFrame()
+                    if not f then return end
+                    local pos = EllesmereUIDB and EllesmereUIDB.secondaryStatsPos
+                    if pos and pos.point then
+                        f:ClearAllPoints()
+                        f:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 0)
+                    end
+                end,
+            }),
+        })
+    end)
+
+    -- Hidden button for FPS keybind toggle
+    local fpsBind = CreateFrame("Button", "EUI_FPSBindBtn", UIParent)
+    fpsBind:Hide()
+    fpsBind:SetScript("OnClick", function()
+        if not EllesmereUIDB then EllesmereUIDB = {} end
+        EllesmereUIDB.showFPS = not EllesmereUIDB.showFPS
+        if EllesmereUI._applyFPSCounter then EllesmereUI._applyFPSCounter() end
+    end)
+
+    -- Apply on login
+    C_Timer.After(1, function()
+        if EllesmereUIDB and EllesmereUIDB.showFPS then
+            EllesmereUI._applyFPSCounter()
+        end
+        -- Restore FPS keybind (protected -- must wait for combat to drop)
+        local function ApplyFPSBind()
+            if EllesmereUIDB and EllesmereUIDB.fpsToggleKey then
+                SetOverrideBindingClick(fpsBind, true, EllesmereUIDB.fpsToggleKey, "EUI_FPSBindBtn")
+            end
+        end
+        if InCombatLockdown() then
+            local w = CreateFrame("Frame")
+            w:RegisterEvent("PLAYER_REGEN_ENABLED")
+            w:SetScript("OnEvent", function(self)
+                self:UnregisterAllEvents()
+                ApplyFPSBind()
+            end)
+        else
+            ApplyFPSBind()
+        end
+    end)
+
+    ---------------------------------------------------------------------------
+    --  Runtime: Durability Warning (flashing on-screen text)
+    ---------------------------------------------------------------------------
+    local durWarnOverlay
+    local function CreateDurabilityWarning()
+        if durWarnOverlay then return end
+
+        durWarnOverlay = CreateFrame("Frame", "EUI_DurabilityWarning", UIParent)
+        durWarnOverlay:SetSize(400, 40)
+        durWarnOverlay:SetFrameStrata("DIALOG")
+        durWarnOverlay:SetFrameLevel(500)
+        durWarnOverlay:EnableMouse(false)
+
+        local fs = durWarnOverlay:CreateFontString(nil, "OVERLAY")
+        fs:SetFont(EllesmereUI.EXPRESSWAY or "Fonts\\FRIZQT__.TTF", 18, EllesmereUI.GetFontOutlineFlag())
+        fs:SetPoint("CENTER")
+        fs:SetText("Low Durability")
+        durWarnOverlay._text = fs
+
+        -- Apply font, color, position, scale from saved settings
+        local function ApplySettings()
+            durWarnOverlay:ClearAllPoints()
+            local pos = EllesmereUIDB and EllesmereUIDB.durWarnPos
+            if pos and pos.point then
+                durWarnOverlay:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 250)
+            else
+                local yOff = EllesmereUIDB and EllesmereUIDB.durWarnYOffset or 250
+                durWarnOverlay:SetPoint("CENTER", UIParent, "CENTER", 0, yOff)
+            end
+            durWarnOverlay:SetScale(1)
+
+            -- Font -- pull from the global "extras" font key
+            local fontPath = EllesmereUI.GetFontPath("extras")
+            local durSz = (EllesmereUIDB and EllesmereUIDB.durWarnTextSize) or 30
+            fs:SetFont(fontPath, durSz, EllesmereUI.GetFontOutlineFlag())
+
+            -- Color
+            local c = EllesmereUIDB and EllesmereUIDB.durWarnColor
+            if c then
+                fs:SetTextColor(c.r, c.g, c.b, 1)
+            else
+                fs:SetTextColor(1, 0.27, 0.27, 1)
+            end
+        end
+        durWarnOverlay._applySettings = ApplySettings
+
+        -- Engine-level pulse animation (no Lua OnUpdate)
+        local ag = fs:CreateAnimationGroup()
+        local fadeOut = ag:CreateAnimation("Alpha")
+        fadeOut:SetFromAlpha(1)
+        fadeOut:SetToAlpha(0.3)
+        fadeOut:SetDuration(0.4)
+        fadeOut:SetOrder(1)
+        local fadeIn = ag:CreateAnimation("Alpha")
+        fadeIn:SetFromAlpha(0.3)
+        fadeIn:SetToAlpha(1)
+        fadeIn:SetDuration(0.4)
+        fadeIn:SetOrder(2)
+        ag:SetLooping("REPEAT")
+
+        durWarnOverlay._show = function(pct)
+            ApplySettings()
+            durWarnOverlay._text:SetText("Low Durability (" .. math.floor(pct) .. "%)")
+            durWarnOverlay:Show()
+            ag:Play()
+        end
+
+        durWarnOverlay:SetScript("OnHide", function()
+            ag:Stop()
+        end)
+
+        durWarnOverlay:Hide()
+    end
+
+    EllesmereUI._applyDurWarn = function()
+        CreateDurabilityWarning()
+        durWarnOverlay._applySettings()
+    end
+    EllesmereUI._durWarnApplySettings = EllesmereUI._applyDurWarn
+
+    -- Preview: show durability warning at its configured position
+    EllesmereUI._durWarnPreview = function()
+        CreateDurabilityWarning()
+        durWarnOverlay._show(25)  -- show with fake 25% for preview (includes ApplySettings)
+        durWarnOverlay._text:SetText("Low Durability (Preview)")
+    end
+
+    EllesmereUI._durWarnHidePreview = function()
+        if durWarnOverlay then durWarnOverlay:Hide() end
+    end
+
+    -- Durability warning: show while out of combat and below threshold, hide on repair or combat
+    local repairWarnFrame = CreateFrame("Frame", "EUI_RepairWarnHandler", UIParent)
+    repairWarnFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+    repairWarnFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
+    repairWarnFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+    repairWarnFrame:RegisterEvent("UPDATE_INVENTORY_DURABILITY")
+
+    local function CheckDurabilityAndShow()
+        if not EllesmereUIDB then return end
+        if EllesmereUIDB.repairWarning == false then
+            if durWarnOverlay then durWarnOverlay:Hide() end
+            return
+        end
+        if InCombatLockdown() then return end
+
+        local lowestDur = 100
+        for slot = 1, 18 do
+            local cur, mx = GetInventoryItemDurability(slot)
+            if cur and mx and mx > 0 then
+                local pct = (cur / mx) * 100
+                if pct < lowestDur then lowestDur = pct end
+            end
+        end
+
+        if lowestDur < (EllesmereUIDB.durWarnThreshold or 40) then
+            CreateDurabilityWarning()
+            durWarnOverlay._show(lowestDur)
+        elseif durWarnOverlay then
+            durWarnOverlay:Hide()
+        end
+    end
+
+    repairWarnFrame:SetScript("OnEvent", function(_, event)
+        if event == "PLAYER_REGEN_DISABLED" then
+            -- Entering combat: hide warning
+            if durWarnOverlay then durWarnOverlay:Hide() end
+            return
+        end
+        -- PLAYER_REGEN_ENABLED, PLAYER_ENTERING_WORLD, UPDATE_INVENTORY_DURABILITY
+        CheckDurabilityAndShow()
+    end)
+
+    ---------------------------------------------------------------------------
+    --  Runtime: Pixel-Perfect UI Scale (UIParent:SetScale)
+    --  Scale is stored directly in EllesmereUIDB.ppUIScale as a decimal.
+    --  Startup applies it early; this handler re-applies at PLAYER_ENTERING_WORLD
+    --  to cover any Blizzard resets, and counter-scales our panel.
+    ---------------------------------------------------------------------------
+    do
+        local function ApplyPPUIScale()
+            local scale = EllesmereUIDB and EllesmereUIDB.ppUIScale
+            if not scale then return end
+            -- Snapshot panel scale before changing UIParent
+            local mf = EllesmereUI._mainFrame
+            local panelScaleBefore
+            if mf then panelScaleBefore = mf:GetEffectiveScale() end
+            EllesmereUI.PP.SetUIScale(scale)
+            -- Counter-scale panel so it stays visually identical
+            if mf and panelScaleBefore then
+                local newEff = UIParent:GetEffectiveScale()
+                if newEff > 0 then mf:SetScale(panelScaleBefore / newEff) end
+            end
+        end
+
+        EllesmereUI._applyPPUIScale = ApplyPPUIScale
+
+        local ppScaleFrame = CreateFrame("Frame")
+        ppScaleFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+        ppScaleFrame:SetScript("OnEvent", function(self)
+            self:UnregisterEvent("PLAYER_ENTERING_WORLD")
+            ApplyPPUIScale()
+        end)
+    end
+
+    ---------------------------------------------------------------------------
+    --  Runtime: Disable Right Click Targeting
+    ---------------------------------------------------------------------------
+    do
+        local mlookBtn = CreateFrame("Button", "EUI_MouseLookBtn", UIParent)
+        mlookBtn:RegisterForClicks("AnyDown", "AnyUp")
+        mlookBtn:SetScript("OnClick", function(_, _, down)
+            if down then MouselookStart() else MouselookStop() end
+        end)
+
+        local stateFrame = CreateFrame("Frame", "EUI_NoRightClickState", UIParent, "SecureHandlerStateTemplate")
+
+        local function ApplyRightClickTarget()
+            if InCombatLockdown() then
+                -- Defer until combat ends
+                local deferFrame = CreateFrame("Frame")
+                deferFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+                deferFrame:SetScript("OnEvent", function(self)
+                    self:UnregisterAllEvents()
+                    ApplyRightClickTarget()
+                end)
+                return
+            end
+            if EllesmereUIDB and EllesmereUIDB.disableRightClickTarget then
+                SecureStateDriverManager:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
+                -- Only block right-click on living hostile units so NPCs,
+                -- quest givers, objects, and corpses remain interactable.
+                RegisterStateDriver(stateFrame, "mov", "[@mouseover,harm,nodead]1;0")
+                stateFrame:SetAttribute("_onstate-mov", [[
+                    if newstate == 1 then
+                        self:SetBindingClick(1, "BUTTON2", "EUI_MouseLookBtn")
+                    else
+                        self:ClearBindings()
+                    end
+                ]])
+            else
+                UnregisterStateDriver(stateFrame, "mov")
+                ClearOverrideBindings(stateFrame)
+            end
+        end
+
+        EllesmereUI._applyRightClickTarget = ApplyRightClickTarget
+
+        local rcInitFrame = CreateFrame("Frame")
+        rcInitFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+        rcInitFrame:SetScript("OnEvent", function(self)
+            self:UnregisterEvent("PLAYER_ENTERING_WORLD")
+            ApplyRightClickTarget()
+        end)
+    end
+
+    ---------------------------------------------------------------------------
+    --  Runtime: Character Crosshair
+    ---------------------------------------------------------------------------
+    do
+        local PP = EllesmereUI.PanelPP
+        local crosshairFrame
+        local function CreateCrosshair()
+            if crosshairFrame then return end
+            crosshairFrame = CreateFrame("Frame", "EUI_CharacterCrosshair", UIParent)
+            crosshairFrame:SetFrameStrata("HIGH")
+            crosshairFrame:SetFrameLevel(100)
+            crosshairFrame:EnableMouse(false)
+            crosshairFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+            crosshairFrame:SetSize(1, 1)
+
+            local function MakeArm()
+                local t = crosshairFrame:CreateTexture(nil, "OVERLAY")
+                if t.SetSnapToPixelGrid then
+                    t:SetSnapToPixelGrid(false)
+                    t:SetTexelSnappingBias(0)
+                end
+                return t
+            end
+            crosshairFrame._hBar = MakeArm()
+            crosshairFrame._vBar = MakeArm()
+        end
+
+        EllesmereUI._applyCrosshair = function()
+            local size = EllesmereUIDB and EllesmereUIDB.crosshairSize or "None"
+            if size == "None" then
+                if crosshairFrame then crosshairFrame:Hide() end
+                return
+            end
+
+            CreateCrosshair()
+
+            local c = EllesmereUIDB and EllesmereUIDB.crosshairColor
+            local cr = c and c.r or 1
+            local cg = c and c.g or 1
+            local cb = c and c.b or 1
+            local ca = c and c.a or 0.75
+
+            -- Thickness in logical pixels: Thin=1, Normal=2, Thick=3
+            -- Do NOT use PP.Scale() on border/line thickness -- raw pixel count
+            local thickness = (size == "Thin") and 1 or (size == "Thick") and 3 or 2
+            -- Arm length: 20 logical px each direction, snapped to physical pixels
+            local ARM = PP.Scale(20)
+
+            local hBar = crosshairFrame._hBar
+            local vBar = crosshairFrame._vBar
+
+            hBar:SetColorTexture(cr, cg, cb, ca)
+            hBar:ClearAllPoints()
+            hBar:SetPoint("LEFT",  crosshairFrame, "CENTER", -ARM, 0)
+            hBar:SetPoint("RIGHT", crosshairFrame, "CENTER",  ARM, 0)
+            hBar:SetHeight(thickness)
+
+            vBar:SetColorTexture(cr, cg, cb, ca)
+            vBar:ClearAllPoints()
+            vBar:SetPoint("TOP",    crosshairFrame, "CENTER", 0,  ARM)
+            vBar:SetPoint("BOTTOM", crosshairFrame, "CENTER", 0, -ARM)
+            vBar:SetWidth(thickness)
+
+            crosshairFrame:Show()
+        end
+
+        -- Apply on login
+        C_Timer.After(1, function()
+            if EllesmereUIDB and EllesmereUIDB.crosshairSize and EllesmereUIDB.crosshairSize ~= "None" then
+                EllesmereUI._applyCrosshair()
+            end
+        end)
+    end
+
+    end  -- EUI_ExtrasRuntimeInit guard
+
+    ---------------------------------------------------------------------------
+    --  Profiles page
+    ---------------------------------------------------------------------------
+
+    ---------------------------------------------------------------------------
+    --  QoL Features page
+    ---------------------------------------------------------------------------
+    local function BuildQoLPage(pageName, parent, yOffset)
+        local W = EllesmereUI.Widgets
+        local y = yOffset
+        local _, h
+        local PP = EllesmereUI.PanelPP
+
+        parent._showRowDivider = true
+
+        _, h = W:Spacer(parent, y, 20);  y = y - h
+
+        if EllesmereUI.BuildMacroFactory then
+            local mfH = EllesmereUI.BuildMacroFactory(parent, y, PP)
+            y = y - mfH
+        end
+
+        ---------------------------------------------------------------------------
+        --  GENERAL
+        ---------------------------------------------------------------------------
+        _, h = W:SectionHeader(parent, "GENERAL", y);  y = y - h
+
+        local row1
+        row1, h = W:DualRow(parent, y,
+            { type="toggle", text="Hide Blizzard Party Panel",
+              tooltip="Hides the collapsed Blizzard party/raid sidebar panel on the side of the screen.",
+              getValue=function()
+                  return EllesmereUIDB and EllesmereUIDB.hideBlizzardPartyFrame or false
+              end,
+              setValue=function(v)
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.hideBlizzardPartyFrame = v
+                  if EllesmereUI._applyHideBlizzardPartyFrame then
+                      EllesmereUI._applyHideBlizzardPartyFrame()
+                  end
+              end },
+            { type="toggle", text="Skip Cinematics",
+              tooltip="When you press Escape or Space during a cinematic, the confirmation prompt is automatically accepted.",
+              getValue=function()
+                  return EllesmereUIDB and EllesmereUIDB.skipCinematics or false
+              end,
+              setValue=function(v)
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.skipCinematics = v
+                  EllesmereUI:RefreshPage()
+              end }
+        );  y = y - h
+
+        -- Cog on Skip Cinematics (right region of row1)
+        do
+            local rightRgn = row1._rightRegion
+            local function cinematicsOff()
+                return not (EllesmereUIDB and EllesmereUIDB.skipCinematics)
+            end
+
+            local _, cinCogShow = EllesmereUI.BuildCogPopup({
+                title = "Cinematic Settings",
+                rows = {
+                    { type="toggle", label="Automatically Skip If Possible",
+                      get=function()
+                          return EllesmereUIDB and EllesmereUIDB.skipCinematicsAuto or false
+                      end,
+                      set=function(v)
+                          if not EllesmereUIDB then EllesmereUIDB = {} end
+                          EllesmereUIDB.skipCinematicsAuto = v
+                      end },
+                },
+            })
+
+            local cinCogBtn = CreateFrame("Button", nil, rightRgn)
+            cinCogBtn:SetSize(26, 26)
+            cinCogBtn:SetPoint("RIGHT", rightRgn._lastInline or rightRgn._control, "LEFT", -9, 0)
+            rightRgn._lastInline = cinCogBtn
+            cinCogBtn:SetFrameLevel(rightRgn:GetFrameLevel() + 5)
+            cinCogBtn:SetAlpha(cinematicsOff() and 0.15 or 0.4)
+            local cinCogTex = cinCogBtn:CreateTexture(nil, "OVERLAY")
+            cinCogTex:SetAllPoints()
+            cinCogTex:SetTexture(EllesmereUI.COGS_ICON)
+            cinCogBtn:SetScript("OnEnter", function(self) self:SetAlpha(0.7) end)
+            cinCogBtn:SetScript("OnLeave", function(self) self:SetAlpha(cinematicsOff() and 0.15 or 0.4) end)
+            cinCogBtn:SetScript("OnClick", function(self) cinCogShow(self) end)
+
+            local cinCogBlock = CreateFrame("Frame", nil, cinCogBtn)
+            cinCogBlock:SetAllPoints()
+            cinCogBlock:SetFrameLevel(cinCogBtn:GetFrameLevel() + 10)
+            cinCogBlock:EnableMouse(true)
+            cinCogBlock:SetScript("OnEnter", function()
+                EllesmereUI.ShowWidgetTooltip(cinCogBtn, EllesmereUI.DisabledTooltip("Skip Cinematics"))
+            end)
+            cinCogBlock:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
+
+            EllesmereUI.RegisterWidgetRefresh(function()
+                local off = cinematicsOff()
+                cinCogBtn:SetAlpha(off and 0.15 or 0.4)
+                if off then cinCogBlock:Show() else cinCogBlock:Hide() end
+            end)
+            if cinematicsOff() then cinCogBlock:Show() else cinCogBlock:Hide() end
+        end
+
+        local row2
+        row2, h = W:DualRow(parent, y,
+            { type="toggle", text="Quick Loot",
+              tooltip="Enables auto loot and hides the loot window when looting. Hold Shift when looting to show.",
+              getValue=function()
+                  return EllesmereUIDB and EllesmereUIDB.quickLoot or false
+              end,
+              setValue=function(v)
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.quickLoot = v
+              end },
+            { type="toggle", text="Auto-Fill Delete Confirmation",
+              tooltip="Automatically types DELETE when throwing away a valuable item. Also allows you to press enter to accept the deletion.",
+              getValue=function()
+                  return EllesmereUIDB and EllesmereUIDB.autoFillDelete or false
+              end,
+              setValue=function(v)
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.autoFillDelete = v
+                  EllesmereUI:RefreshPage()
+              end }
+        );  y = y - h
+
+        -- Auto Repair | Auto Sell Junk
+        local repairRow
+        repairRow, h = W:DualRow(parent, y,
+            { type="toggle", text="Auto Repair",
+              tooltip="Automatically repair all gear when visiting a repair vendor.",
+              getValue=function()
+                  if not EllesmereUIDB then return true end
+                  return EllesmereUIDB.autoRepair ~= false
+              end,
+              setValue=function(v)
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.autoRepair = v
+                  EllesmereUI:RefreshPage()
+              end },
+            { type="toggle", text="Auto Sell Junk",
+              tooltip="Automatically sell all junk items when visiting a vendor.",
+              getValue=function()
+                  if not EllesmereUIDB then return true end
+                  return EllesmereUIDB.autoSellJunk ~= false
+              end,
+              setValue=function(v)
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.autoSellJunk = v
+              end }
+        );  y = y - h
+
+        -- Cog on Auto Repair (left region)
+        do
+            local leftRgn = repairRow._leftRegion
+            local function repairOff()
+                return not (EllesmereUIDB and EllesmereUIDB.autoRepair ~= false)
+            end
+
+            local _, repCogShow = EllesmereUI.BuildCogPopup({
+                title = "Auto Repair Settings",
+                rows = {
+                    { type="toggle", label="Use Guild Bank Funds",
+                      get=function()
+                          if not EllesmereUIDB then return true end
+                          return EllesmereUIDB.autoRepairGuild ~= false
+                      end,
+                      set=function(v)
+                          if not EllesmereUIDB then EllesmereUIDB = {} end
+                          EllesmereUIDB.autoRepairGuild = v
+                      end },
+                },
+            })
+
+            local repCogBtn = CreateFrame("Button", nil, leftRgn)
+            repCogBtn:SetSize(26, 26)
+            repCogBtn:SetPoint("RIGHT", leftRgn._lastInline or leftRgn._control, "LEFT", -9, 0)
+            leftRgn._lastInline = repCogBtn
+            repCogBtn:SetFrameLevel(leftRgn:GetFrameLevel() + 5)
+            repCogBtn:SetAlpha(repairOff() and 0.15 or 0.4)
+            local repCogTex = repCogBtn:CreateTexture(nil, "OVERLAY")
+            repCogTex:SetAllPoints()
+            repCogTex:SetTexture(EllesmereUI.COGS_ICON)
+            repCogBtn:SetScript("OnEnter", function(self) self:SetAlpha(0.7) end)
+            repCogBtn:SetScript("OnLeave", function(self) self:SetAlpha(repairOff() and 0.15 or 0.4) end)
+            repCogBtn:SetScript("OnClick", function(self) repCogShow(self) end)
+
+            local repCogBlock = CreateFrame("Frame", nil, repCogBtn)
+            repCogBlock:SetAllPoints()
+            repCogBlock:SetFrameLevel(repCogBtn:GetFrameLevel() + 10)
+            repCogBlock:EnableMouse(true)
+            repCogBlock:SetScript("OnEnter", function()
+                EllesmereUI.ShowWidgetTooltip(repCogBtn, EllesmereUI.DisabledTooltip("Auto Repair"))
+            end)
+            repCogBlock:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
+
+            EllesmereUI.RegisterWidgetRefresh(function()
+                local off = repairOff()
+                repCogBtn:SetAlpha(off and 0.15 or 0.4)
+                if off then repCogBlock:Show() else repCogBlock:Hide() end
+            end)
+            if repairOff() then repCogBlock:Show() else repCogBlock:Hide() end
+        end
+
+        _, h = W:DualRow(parent, y,
+            { type="toggle", text="AH Current Expansion Only",
+              tooltip="Automatically enables the 'Current Expansion Only' filter whenever you open the Auction House.",
+              getValue=function()
+                  return EllesmereUIDB and EllesmereUIDB.ahCurrentExpansion or false
+              end,
+              setValue=function(v)
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.ahCurrentExpansion = v
+              end },
+            { type="label", text="" }
+        );  y = y - h
+
+        _, h = W:Spacer(parent, y, 20);  y = y - h
+
+        ---------------------------------------------------------------------------
+        --  EXTRAS
+        ---------------------------------------------------------------------------
         _, h = W:SectionHeader(parent, "EXTRAS", y);  y = y - h
 
         -- Row 1: Show FPS Counter (left, with swatch+cog) | FPS Toggle Keybind (right)
@@ -1111,29 +2792,6 @@ initFrame:SetScript("OnEvent", function(self)
             end)
         end
 
-        -- Row 2: Auto Repair (left) | Auto Sell Junk (right)
-        _, h = W:DualRow(parent, y,
-            { type="toggle", text="Auto Repair",
-              tooltip="Automatically repair all gear when visiting a repair vendor.",
-              getValue=function()
-                if not EllesmereUIDB then return true end
-                return EllesmereUIDB.autoRepair ~= false
-              end,
-              setValue=function(v)
-                if not EllesmereUIDB then EllesmereUIDB = {} end
-                EllesmereUIDB.autoRepair = v
-              end },
-            { type="toggle", text="Auto Sell Junk",
-              tooltip="Automatically sell all junk items when visiting a vendor.",
-              getValue=function()
-                return EllesmereUIDB.autoSellJunk ~= false
-              end,
-              setValue=function(v)
-                if not EllesmereUIDB then EllesmereUIDB = {} end
-                EllesmereUIDB.autoSellJunk = v
-              end }
-        );  y = y - h
-
         -- Row 3: Low Durability Warning (left, with cog+eye+swatch) | Disable Right Click Targeting (right)
         local durWarnRow
         durWarnRow, h = W:DualRow(parent, y,
@@ -1231,7 +2889,7 @@ initFrame:SetScript("OnEvent", function(self)
                       set=function(v)
                         if not EllesmereUIDB then EllesmereUIDB = {} end
                         EllesmereUIDB.durWarnYOffset = v
-                        EllesmereUIDB.durWarnPos = nil
+                        EllesmereUIDB.durWarnPos = nil  -- clear custom pos so slider always takes effect
                         if EllesmereUI._durWarnPreview then EllesmereUI._durWarnPreview() end
                       end },
                     { type="slider", label="Repair %",
@@ -1650,1408 +3308,187 @@ initFrame:SetScript("OnEvent", function(self)
 
         _, h = W:Spacer(parent, y, 20);  y = y - h
 
-        -------------------------------------------------------------------
-        --  FLOATING COMBAT TEXT
-        -------------------------------------------------------------------
-        _, h = W:SectionHeader(parent, "FLOATING COMBAT TEXT", y);  y = y - h
+        ---------------------------------------------------------------------------
+        --  GROUP FINDER
+        ---------------------------------------------------------------------------
+        _, h = W:SectionHeader(parent, "GROUP FINDER", y);  y = y - h
 
         _, h = W:DualRow(parent, y,
-            { type="slider", text="Combat Text Size",
-              min=0.5, max=2.5, step=0.1,
-              getValue=function() return GetCVarNum("WorldTextScale_v2") end,
-              setValue=function(v)
-                v = floor(v * 10 + 0.5) / 10
-                SetCVarSafe("WorldTextScale_v2", v)
-              end },
-            { type="toggle", text="Show Healing Text",
-              getValue=function() return GetCVarBool("floatingCombatTextCombatHealing_v2") end,
-              setValue=function(v)
-                SetCVarSafe("floatingCombatTextCombatHealing_v2", v and "1" or "0")
-              end });  y = y - h
-
-        local FCT_FONT_DIR = "Interface\\AddOns\\EllesmereUI\\media\\fonts\\"
-        local fctFontValues = {
-            ["default"]                                = { text = "Blizzard Default", font = "Fonts\\FRIZQT__.TTF" },
-            [FCT_FONT_DIR .. "Expressway.TTF"]         = { text = "Expressway",            font = FCT_FONT_DIR .. "Expressway.TTF" },
-            [FCT_FONT_DIR .. "Avant Garde Naowh.ttf"]        = { text = "Avant Garde (Naowh)",   font = FCT_FONT_DIR .. "Avant Garde Naowh.ttf" },
-            [FCT_FONT_DIR .. "Arial Bold.TTF"]         = { text = "Arial Bold",            font = FCT_FONT_DIR .. "Arial Bold.TTF" },
-            [FCT_FONT_DIR .. "Poppins.ttf"]            = { text = "Poppins",               font = FCT_FONT_DIR .. "Poppins.ttf" },
-            [FCT_FONT_DIR .. "FiraSans Medium.ttf"]    = { text = "Fira Sans Medium",      font = FCT_FONT_DIR .. "FiraSans Medium.ttf" },
-            [FCT_FONT_DIR .. "Arial Narrow.ttf"]       = { text = "Arial Narrow",          font = FCT_FONT_DIR .. "Arial Narrow.ttf" },
-            [FCT_FONT_DIR .. "Changa.ttf"]             = { text = "Changa",                font = FCT_FONT_DIR .. "Changa.ttf" },
-            [FCT_FONT_DIR .. "Cinzel Decorative.ttf"]  = { text = "Cinzel Decorative",     font = FCT_FONT_DIR .. "Cinzel Decorative.ttf" },
-            [FCT_FONT_DIR .. "Exo.otf"]                = { text = "Exo",                   font = FCT_FONT_DIR .. "Exo.otf" },
-            [FCT_FONT_DIR .. "FiraSans Bold.ttf"]      = { text = "Fira Sans Bold",        font = FCT_FONT_DIR .. "FiraSans Bold.ttf" },
-            [FCT_FONT_DIR .. "FiraSans Light.ttf"]     = { text = "Fira Sans Light",       font = FCT_FONT_DIR .. "FiraSans Light.ttf" },
-            [FCT_FONT_DIR .. "Future X Black.otf"]     = { text = "Future X Black",        font = FCT_FONT_DIR .. "Future X Black.otf" },
-            [FCT_FONT_DIR .. "Gotham Narrow Ultra.otf"] = { text = "Gotham Narrow Ultra",  font = FCT_FONT_DIR .. "Gotham Narrow Ultra.otf" },
-            [FCT_FONT_DIR .. "Gotham Narrow.otf"]      = { text = "Gotham Narrow",         font = FCT_FONT_DIR .. "Gotham Narrow.otf" },
-            [FCT_FONT_DIR .. "Russo One.ttf"]          = { text = "Russo One",             font = FCT_FONT_DIR .. "Russo One.ttf" },
-            [FCT_FONT_DIR .. "Ubuntu.ttf"]             = { text = "Ubuntu",                font = FCT_FONT_DIR .. "Ubuntu.ttf" },
-            [FCT_FONT_DIR .. "Homespun.ttf"]           = { text = "Homespun",              font = FCT_FONT_DIR .. "Homespun.ttf" },
-            ["Fonts\\FRIZQT__.TTF"]                    = { text = "Friz Quadrata",         font = "Fonts\\FRIZQT__.TTF" },
-            ["Fonts\\ARIALN.TTF"]                      = { text = "Arial",                 font = "Fonts\\ARIALN.TTF" },
-            ["Fonts\\MORPHEUS.TTF"]                    = { text = "Morpheus",              font = "Fonts\\MORPHEUS.TTF" },
-            ["Fonts\\skurri.ttf"]                      = { text = "Skurri",                font = "Fonts\\skurri.ttf" },
-        }
-        local fctFontOrder = {
-            "default",
-            FCT_FONT_DIR .. "Expressway.TTF",
-            FCT_FONT_DIR .. "Avant Garde Naowh.ttf",
-            FCT_FONT_DIR .. "Arial Bold.TTF",
-            FCT_FONT_DIR .. "Poppins.ttf",
-            FCT_FONT_DIR .. "FiraSans Medium.ttf",
-            "---",
-            FCT_FONT_DIR .. "Arial Narrow.ttf",
-            FCT_FONT_DIR .. "Changa.ttf",
-            FCT_FONT_DIR .. "Cinzel Decorative.ttf",
-            FCT_FONT_DIR .. "Exo.otf",
-            FCT_FONT_DIR .. "FiraSans Bold.ttf",
-            FCT_FONT_DIR .. "FiraSans Light.ttf",
-            FCT_FONT_DIR .. "Future X Black.otf",
-            FCT_FONT_DIR .. "Gotham Narrow Ultra.otf",
-            FCT_FONT_DIR .. "Gotham Narrow.otf",
-            FCT_FONT_DIR .. "Russo One.ttf",
-            FCT_FONT_DIR .. "Ubuntu.ttf",
-            FCT_FONT_DIR .. "Homespun.ttf",
-            "Fonts\\FRIZQT__.TTF",
-            "Fonts\\ARIALN.TTF",
-            "Fonts\\MORPHEUS.TTF",
-            "Fonts\\skurri.ttf",
-        }
-        if EllesmereUI.AppendSharedMediaFonts then
-            EllesmereUI.AppendSharedMediaFonts(fctFontValues, fctFontOrder)
-        end
-
-        local showDmgRow
-        showDmgRow, h = W:DualRow(parent, y,
-            { type="toggle", text="Show Damage Text",
+            { type="toggle", text="Sort by Mythic+ Rating",
+              -- Feature temporarily disabled: the previous implementation
+              -- hooksecurefunc'd LFGListUtil_SortApplicants and mutated the
+              -- Blizzard applicants table in place via table.sort, which
+              -- tainted subsequent applicantInfo.comment and dungeon-score
+              -- comparisons in Blizzard's LFGListApplicationViewer. Needs
+              -- a taint-safe reimplementation before re-enabling. See the
+              -- commented-out logic in EUI_QoL.lua around line 724.
+              disabled = function() return true end,
+              disabledTooltip = "This option is temporarily disabled",
+              getValue=function() return false end,
+              setValue=function() end },
+            { type="toggle", text="Auto Insert Keystone",
+              tooltip="Automatically inserts your key into the Font of Power.",
               getValue=function()
-                return GetCVarBool("floatingCombatTextCombatDamage_v2")
+                  if not EllesmereUIDB then return true end
+                  return EllesmereUIDB.autoInsertKeystone ~= false
               end,
               setValue=function(v)
-                SetCVarSafe("floatingCombatTextCombatDamage_v2", v and "1" or "0")
-                EllesmereUI:RefreshPage()
-              end },
-            { type="dropdown", text="Combat Text Font",
-              tooltip="WARNING: This feature requires you to re-log or restart WoW to take effect.",
-              tooltipOpts={ color={1, 0.3, 0.3} },
-              values = fctFontValues, order = fctFontOrder,
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.autoInsertKeystone = v
+              end }
+        );  y = y - h
+
+        _, h = W:DualRow(parent, y,
+            { type="toggle", text="Announce Instance Reset",
+              tooltip="After a successful instance reset, automatically announces it in party or raid chat so your group knows they can re-enter.",
               getValue=function()
-                return (EllesmereUIDB and EllesmereUIDB.fctFont) or "default"
+                  return EllesmereUIDB and EllesmereUIDB.instanceResetAnnounce or false
               end,
               setValue=function(v)
-                if not EllesmereUIDB then EllesmereUIDB = {} end
-                if v == "default" then
-                    EllesmereUIDB.fctFont = nil
-                else
-                    EllesmereUIDB.fctFont = v
-                end
-                EllesmereUI:ShowConfirmPopup({
-                    title   = "Logout Required",
-                    message = "Combat text font changes require a logout to character select to take effect. This is a WoW engine limitation.",
-                    confirmText = "Okay",
-                    cancelText  = "Later",
-                })
-              end });  y = y - h
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.instanceResetAnnounce = v
+              end }
+        );  y = y - h
 
-        -- Inline cog on "Show Damage Text" left region for pet damage sub-settings
+        local quickSignupRow
+        quickSignupRow, h = W:DualRow(parent, y,
+            { type="toggle", text="Quick Signup",
+              tooltip="Double-click a group listing to instantly sign up. Automatically accepts role check.",
+              getValue=function()
+                  return EllesmereUIDB and EllesmereUIDB.quickSignup or false
+              end,
+              setValue=function(v)
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.quickSignup = v
+              end },
+            { type="toggle", text="Persistent Signup Note",
+              tooltip="Keeps your note text in the Sign Up dialog instead of clearing it each time you open it.",
+              getValue=function()
+                  return EllesmereUIDB and EllesmereUIDB.persistSignupNote or false
+              end,
+              setValue=function(v)
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.persistSignupNote = v
+                  if EllesmereUI._applyPersistSignupNote then
+                      EllesmereUI._applyPersistSignupNote()
+                  end
+              end }
+        );  y = y - h
+
+        -- Cog on Quick Signup (left region)
         do
-            local dmgOff = function() return not GetCVarBool("floatingCombatTextCombatDamage_v2") end
-            local leftRgn = showDmgRow._leftRegion
+            local leftRgn = quickSignupRow._leftRegion
+            local function quickSignupOff()
+                return not (EllesmereUIDB and EllesmereUIDB.quickSignup)
+            end
 
-            local _, dmgCogShow = EllesmereUI.BuildCogPopup({
-                title = "Damage Text Settings",
+            local _, qsCogShow = EllesmereUI.BuildCogPopup({
+                title = "Quick Signup Settings",
                 rows = {
-                    { type="toggle", label="Show Periodic Damage",
-                      get=function() return GetCVarBool("floatingCombatTextCombatLogPeriodicSpells_v2") end,
-                      set=function(v) SetCVarSafe("floatingCombatTextCombatLogPeriodicSpells_v2", v and "1" or "0") end },                            
-                    { type="toggle", label="Show Pet Melee Damage",
-                      get=function() return GetCVarBool("floatingCombatTextPetMeleeDamage_v2") end,
-                      set=function(v) SetCVarSafe("floatingCombatTextPetMeleeDamage_v2", v and "1" or "0") end },
-                    { type="toggle", label="Show Pet Spell Damage",
-                      get=function() return GetCVarBool("floatingCombatTextPetSpellDamage_v2") end,
-                      set=function(v) SetCVarSafe("floatingCombatTextPetSpellDamage_v2", v and "1" or "0") end },
+                    { type="toggle", label="Hold Shift to stop automatic Role Check",
+                      get=function()
+                          return EllesmereUIDB and EllesmereUIDB.quickSignupAutoRoleShift or false
+                      end,
+                      set=function(v)
+                          if not EllesmereUIDB then EllesmereUIDB = {} end
+                          EllesmereUIDB.quickSignupAutoRoleShift = v
+                      end },
                 },
             })
 
-            local dmgCogBtn = CreateFrame("Button", nil, leftRgn)
-            dmgCogBtn:SetSize(26, 26)
-            dmgCogBtn:SetPoint("RIGHT", leftRgn._lastInline or leftRgn._control, "LEFT", -9, 0)
-            leftRgn._lastInline = dmgCogBtn
-            dmgCogBtn:SetFrameLevel(leftRgn:GetFrameLevel() + 5)
-            dmgCogBtn:SetAlpha(dmgOff() and 0.15 or 0.4)
-            local dmgCogTex = dmgCogBtn:CreateTexture(nil, "OVERLAY")
-            dmgCogTex:SetAllPoints()
-            dmgCogTex:SetTexture(EllesmereUI.COGS_ICON)
-            dmgCogBtn:SetScript("OnEnter", function(self) self:SetAlpha(0.7) end)
-            dmgCogBtn:SetScript("OnLeave", function(self) self:SetAlpha(dmgOff() and 0.15 or 0.4) end)
-            dmgCogBtn:SetScript("OnClick", function(self) dmgCogShow(self) end)
+            local qsCogBtn = CreateFrame("Button", nil, leftRgn)
+            qsCogBtn:SetSize(26, 26)
+            qsCogBtn:SetPoint("RIGHT", leftRgn._lastInline or leftRgn._control, "LEFT", -9, 0)
+            leftRgn._lastInline = qsCogBtn
+            qsCogBtn:SetFrameLevel(leftRgn:GetFrameLevel() + 5)
+            qsCogBtn:SetAlpha(quickSignupOff() and 0.15 or 0.4)
+            local qsCogTex = qsCogBtn:CreateTexture(nil, "OVERLAY")
+            qsCogTex:SetAllPoints()
+            qsCogTex:SetTexture(EllesmereUI.COGS_ICON)
+            qsCogBtn:SetScript("OnEnter", function(self) self:SetAlpha(0.7) end)
+            qsCogBtn:SetScript("OnLeave", function(self) self:SetAlpha(quickSignupOff() and 0.15 or 0.4) end)
+            qsCogBtn:SetScript("OnClick", function(self) qsCogShow(self) end)
 
-            local dmgCogBlock = CreateFrame("Frame", nil, dmgCogBtn)
-            dmgCogBlock:SetAllPoints()
-            dmgCogBlock:SetFrameLevel(dmgCogBtn:GetFrameLevel() + 10)
-            dmgCogBlock:EnableMouse(true)
-            dmgCogBlock:SetScript("OnEnter", function()
-                EllesmereUI.ShowWidgetTooltip(dmgCogBtn, EllesmereUI.DisabledTooltip("Show Damage Text"))
+            local qsCogBlock = CreateFrame("Frame", nil, qsCogBtn)
+            qsCogBlock:SetAllPoints()
+            qsCogBlock:SetFrameLevel(qsCogBtn:GetFrameLevel() + 10)
+            qsCogBlock:EnableMouse(true)
+            qsCogBlock:SetScript("OnEnter", function()
+                EllesmereUI.ShowWidgetTooltip(qsCogBtn, EllesmereUI.DisabledTooltip("Quick Signup"))
             end)
-            dmgCogBlock:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
-
-            EllesmereUI.RegisterWidgetRefresh(function()
-                if dmgOff() then
-                    dmgCogBtn:SetAlpha(0.15)
-                    dmgCogBlock:Show()
-                else
-                    dmgCogBtn:SetAlpha(0.4)
-                    dmgCogBlock:Hide()
-                end
-            end)
-
-            dmgCogBtn:SetAlpha(dmgOff() and 0.15 or 0.4)
-            if dmgOff() then dmgCogBlock:Show() else dmgCogBlock:Hide() end
+            qsCogBlock:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
+            if quickSignupOff() then
+                qsCogBtn:Disable()
+                qsCogBlock:Show()
+            else
+                qsCogBtn:Enable()
+                qsCogBlock:Hide()
+            end
         end
 
         _, h = W:Spacer(parent, y, 20);  y = y - h
 
-        -------------------------------------------------------------------
-        --  DEVELOPER
-        -------------------------------------------------------------------
-        _, h = W:SectionHeader(parent, "DEVELOPER", y);  y = y - h
+        ---------------------------------------------------------------------------
+        --  UI
+        ---------------------------------------------------------------------------
+        _, h = W:SectionHeader(parent, "UI", y);  y = y - h
 
         _, h = W:DualRow(parent, y,
-            { type="toggle", text="Show Lua Errors In Chat",
+            { type="toggle", text="Hide Screenshot Status",
+              tooltip="Hides the 'Screenshot saved' notification that appears on screen after taking a screenshot.",
               getValue=function()
-                return EllesmereUIDB and EllesmereUIDB.errorGrabber == true
+                  if not EllesmereUIDB then return true end
+                  return EllesmereUIDB.hideScreenshotStatus ~= false
               end,
               setValue=function(v)
-                if not EllesmereUIDB then EllesmereUIDB = {} end
-                EllesmereUIDB.errorGrabber = v
-                if v then
-                    EllesmereUI._enableErrorGrabber()
-                    EllesmereUIDB.suppressErrors = false
-                else
-                    EllesmereUI._disableErrorGrabber()
-                    EllesmereUIDB.suppressErrors = true
-                    SetCVarSafe("scriptErrors", "0")
-                end
-                EllesmereUI:RefreshPage()
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.hideScreenshotStatus = v
+                  if EllesmereUI._applyScreenshotStatus then
+                      EllesmereUI._applyScreenshotStatus()
+                  end
               end },
-            { type="toggle", text="Play Sound on Lua Error",
-              disabled=function()
-                return not (EllesmereUIDB and EllesmereUIDB.errorGrabber == true)
-              end,
-              disabledTooltip="Show Lua Errors In Chat",
+            { type="toggle", text="Train All Button",
+              tooltip="Adds a 'Train All' button next to the Train button at profession trainers, allowing you to learn all available skills with one click.",
               getValue=function()
-                return EllesmereUIDB and EllesmereUIDB.errorSound or false
+                  return EllesmereUIDB and EllesmereUIDB.trainAllButton or false
               end,
               setValue=function(v)
-                if not EllesmereUIDB then EllesmereUIDB = {} end
-                EllesmereUIDB.errorSound = v
-              end });  y = y - h
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.trainAllButton = v
+                  if EllesmereUI._applyTrainAllButton then
+                      EllesmereUI._applyTrainAllButton()
+                  end
+              end }
+        );  y = y - h
 
         _, h = W:DualRow(parent, y,
-            { type="toggle", text="Suppress Lua Errors",
-              disabled=function()
-                return EllesmereUIDB and EllesmereUIDB.errorGrabber == true
-              end,
-              disabledTooltip="Show Lua Errors In Chat",
+            { type="toggle", text="Auto Unwrap Collections",
+              tooltip="Automatically dismisses the 'new mount/pet/toy' fanfare notification when you receive one, so you don't have to click through the collections journal.",
               getValue=function()
-                return not (EllesmereUIDB and EllesmereUIDB.suppressErrors == false)
+                  return EllesmereUIDB and EllesmereUIDB.autoUnwrapCollections or false
               end,
               setValue=function(v)
-                if not EllesmereUIDB then EllesmereUIDB = {} end
-                EllesmereUIDB.suppressErrors = v
-                SetCVarSafe("scriptErrors", v and "0" or "1")
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.autoUnwrapCollections = v
+                  if EllesmereUI._applyAutoUnwrap then
+                      EllesmereUI._applyAutoUnwrap()
+                  end
               end },
-            { type="toggle", text="Show Spell ID on Tooltip",
+            { type="toggle", text="Auto Open Containers",
+              tooltip="Automatically opens bags, boxes and parcels in your inventory when they are added to your bags.",
               getValue=function()
-                return EllesmereUIDB and EllesmereUIDB.showSpellID or false
+                  if not EllesmereUIDB then return true end
+                  return EllesmereUIDB.autoOpenContainers ~= false
               end,
               setValue=function(v)
-                if not EllesmereUIDB then EllesmereUIDB = {} end
-                EllesmereUIDB.showSpellID = v
-              end });  y = y - h
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.autoOpenContainers = v
+              end }
+        );  y = y - h
 
         _, h = W:Spacer(parent, y, 20);  y = y - h
-
-        -- Reset ALL EUI Addon Settings (wide warning button)
-        y = y - 30  -- spacer
-        do
-            local BTN_W, BTN_H = 300, 38
-            local lerp = EllesmereUI.lerp
-            local DARK_BG = EllesmereUI.DARK_BG or { r = 0.05, g = 0.07, b = 0.09 }
-            local btn = CreateFrame("Button", nil, parent)
-            btn:SetSize(BTN_W, BTN_H)
-            btn:SetPoint("TOP", parent, "TOP", 0, y)
-            btn:SetFrameLevel(parent:GetFrameLevel() + 5)
-            btn:SetAlpha(0.85)
-            local brd = EllesmereUI.MakeBorder(btn, 0.8, 0.2, 0.2, 0.5, EllesmereUI.PanelPP)
-            local bg = EllesmereUI.SolidTex(btn, "BACKGROUND", DARK_BG.r, DARK_BG.g, DARK_BG.b, 0.92)
-            bg:SetAllPoints()
-            local lbl = EllesmereUI.MakeFont(btn, 13, nil, 0.9, 0.3, 0.3)
-            lbl:SetAlpha(0.7)
-            lbl:SetPoint("CENTER")
-            lbl:SetText("Reset ALL EUI Addon Settings")
-            do
-                local FADE_DUR = 0.1
-                local progress, target = 0, 0
-                local function Apply(t)
-                    lbl:SetTextColor(lerp(0.9, 1, t), lerp(0.3, 0.35, t), lerp(0.3, 0.35, t), lerp(0.7, 1, t))
-                    brd:SetColor(0.8, 0.2, 0.2, lerp(0.5, 0.8, t))
-                end
-                local function OnUpdate(self, elapsed)
-                    local dir = (target == 1) and 1 or -1
-                    progress = progress + dir * (elapsed / FADE_DUR)
-                    if (dir == 1 and progress >= 1) or (dir == -1 and progress <= 0) then
-                        progress = target; self:SetScript("OnUpdate", nil)
-                    end
-                    Apply(progress)
-                end
-                btn:SetScript("OnEnter", function(self) target = 1; self:SetScript("OnUpdate", OnUpdate) end)
-                btn:SetScript("OnLeave", function(self) target = 0; self:SetScript("OnUpdate", OnUpdate) end)
-            end
-            btn:SetScript("OnClick", function()
-                EllesmereUI:ShowConfirmPopup({
-                    title       = "Reset ALL Settings",
-                    message     = "Are you sure you want to reset ALL EUI addon settings to their defaults? This will reload your UI.",
-                    disclaimer  = "This resets every EUI addon, not just the current one.",
-                    confirmText = "Reset All & Reload",
-                    cancelText  = "Cancel",
-                    onConfirm   = function()
-                        -- Nuclear wipe: same logic as the beta-exit popup
-                        local svNames = {
-                            "EllesmereUIActionBarsDB",
-                            "EllesmereUIAuraBuffRemindersDB",
-                            "EllesmereUIBasicsDB",
-                            "EllesmereUICooldownManagerDB",
-                            "EllesmereUINameplatesDB",
-                            "EllesmereUIResourceBarsDB",
-                            "EllesmereUIUnitFramesDB",
-                        }
-                        for _, name in ipairs(svNames) do
-                            _G[name] = {}
-                        end
-                        local oldScale = EllesmereUIDB and EllesmereUIDB.ppUIScale
-                        local oldScaleAuto = EllesmereUIDB and EllesmereUIDB.ppUIScaleAuto
-                        local resetVer = EllesmereUIDB and EllesmereUIDB._resetVersion
-                        _G["EllesmereUIDB"] = { _resetVersion = resetVer }
-                        EllesmereUIDB = _G["EllesmereUIDB"]
-                        if oldScale then EllesmereUIDB.ppUIScale = oldScale end
-                        if oldScaleAuto ~= nil then EllesmereUIDB.ppUIScaleAuto = oldScaleAuto end
-                        ReloadUI()
-                    end,
-                })
-            end)
-            y = y - BTN_H
-        end
-
         return math.abs(y)
     end
-
-    ---------------------------------------------------------------------------
-    --  Quick Setup page  (curated quick-access to key settings per addon)
-    --  Action Bars options are live; others are temporary placeholders
-    --  until those addons register their core settings.
-    ---------------------------------------------------------------------------
-    local function BuildCoreOptionsPage(pageName, parent, yOffset)
-        local W = EllesmereUI.Widgets
-        local y = yOffset
-        local _, h
-
-        -------------------------------------------------------------------
-        --  ACTION BARS
-        -------------------------------------------------------------------
-        _, h = W:SectionHeader(parent, "ACTION BARS", y);  y = y - h
-
-        -- Access EAB through addon registry
-        local EAB = EllesmereUI.Lite and EllesmereUI.Lite.GetAddon("EllesmereUIActionBars", true)
-        local function EAB_db()
-            if EAB and EAB.db then return EAB.db.profile end
-            return nil
-        end
-
-        _, h = W:Toggle(parent, "Modern Icons", y,
-            function()
-                local db = EAB_db()
-                return db and db.squareIcons or false
-            end,
-            function(v)
-                local db = EAB_db()
-                if not db then return end
-                db.squareIcons = v
-                if EAB and EAB.ApplyShapes then EAB:ApplyShapes() end
-                if EAB and EAB.ApplyBorders then EAB:ApplyBorders() end
-            end);  y = y - h
-
-        _, h = W:Slider(parent, "Icon Zoom", y, 0, 10, 0.5,
-            function()
-                local db = EAB_db()
-                return db and (db.iconZoom or 5.5) or 5.5
-            end,
-            function(v)
-                local db = EAB_db()
-                if not db then return end
-                db.iconZoom = v
-                if EAB and EAB.ApplyBorders then
-                    EAB:ApplyBorders()
-                end
-                if EAB and EAB.ApplyShapes then
-                    EAB:ApplyShapes()
-                end
-            end);  y = y - h
-
-        _, h = W:Spacer(parent, y, 20);  y = y - h
-
-        -------------------------------------------------------------------
-        --  NAMEPLATES
-        -------------------------------------------------------------------
-        _, h = W:SectionHeader(parent, "NAMEPLATES", y);  y = y - h
-
-        _, h = W:Toggle(parent, "TEMPORARY", y,
-            function() return false end,
-            function(v) end);  y = y - h
-
-        _, h = W:Spacer(parent, y, 20);  y = y - h
-
-        -------------------------------------------------------------------
-        --  UNIT FRAMES
-        -------------------------------------------------------------------
-        _, h = W:SectionHeader(parent, "UNIT FRAMES", y);  y = y - h
-
-        _, h = W:Toggle(parent, "TEMPORARY", y,
-            function() return false end,
-            function(v) end);  y = y - h
-
-        _, h = W:Spacer(parent, y, 20);  y = y - h
-
-        -------------------------------------------------------------------
-        --  BAR GLOWS
-        -------------------------------------------------------------------
-        _, h = W:SectionHeader(parent, "BAR GLOWS", y);  y = y - h
-
-        _, h = W:Toggle(parent, "TEMPORARY", y,
-            function() return false end,
-            function(v) end);  y = y - h
-
-        _, h = W:Spacer(parent, y, 20);  y = y - h
-
-        -------------------------------------------------------------------
-        --  CONSUMABLES
-        -------------------------------------------------------------------
-        _, h = W:SectionHeader(parent, "CONSUMABLES", y);  y = y - h
-
-        _, h = W:Toggle(parent, "TEMPORARY", y,
-            function() return false end,
-            function(v) end);  y = y - h
-
-        _, h = W:Spacer(parent, y, 20);  y = y - h
-
-        -------------------------------------------------------------------
-        --  CURSOR CIRCLE
-        -------------------------------------------------------------------
-        _, h = W:SectionHeader(parent, "CURSOR CIRCLE", y);  y = y - h
-
-        _, h = W:Toggle(parent, "TEMPORARY", y,
-            function() return false end,
-            function(v) end);  y = y - h
-
-        _, h = W:Spacer(parent, y, 20);  y = y - h
-
-        -------------------------------------------------------------------
-        --  BEACON REMINDERS
-        -------------------------------------------------------------------
-        _, h = W:SectionHeader(parent, "BEACON REMINDERS", y);  y = y - h
-
-        _, h = W:Toggle(parent, "TEMPORARY", y,
-            function() return false end,
-            function(v) end);  y = y - h
-
-        return math.abs(y)
-    end
-
-    ---------------------------------------------------------------------------
-    --  Re-read live CVar values every time the panel is opened.
-    --  Widgets call their getter on each build, so a page rebuild is enough
-    --  to pick up any CVar changes made externally (other addons, /console).
-    ---------------------------------------------------------------------------
-    EllesmereUI:RegisterOnShow(function()
-        if EllesmereUI:GetActiveModule() == GLOBAL_KEY then
-            EllesmereUI:RefreshPage()
-        end
-    end)
-
-    ---------------------------------------------------------------------------
-    --  Register the module
-    ---------------------------------------------------------------------------
-
-    ---------------------------------------------------------------------------
-    --  Colors Page
-    ---------------------------------------------------------------------------
-    local CLASS_ORDER = {
-        "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST",
-        "DEATHKNIGHT", "SHAMAN", "MAGE", "WARLOCK", "MONK",
-        "DRUID", "DEMONHUNTER", "EVOKER",
-    }
-    local CLASS_LABELS = {
-        WARRIOR = "Warrior", PALADIN = "Paladin", HUNTER = "Hunter",
-        ROGUE = "Rogue", PRIEST = "Priest", DEATHKNIGHT = "Death Knight",
-        SHAMAN = "Shaman", MAGE = "Mage", WARLOCK = "Warlock",
-        MONK = "Monk", DRUID = "Druid", DEMONHUNTER = "Demon Hunter",
-        EVOKER = "Evoker",
-    }
-    local POWER_LABELS = {
-        MANA = "Mana", RAGE = "Rage", FOCUS = "Focus", ENERGY = "Energy",
-        RUNIC_POWER = "Runic Power", LUNAR_POWER = "Lunar Power",
-        INSANITY = "Insanity", MAELSTROM = "Maelstrom", FURY = "Fury",
-        PAIN = "Pain",
-    }
-    local RESOURCE_LABELS = {
-        ComboPoints = "Combo Points", HolyPower = "Holy Power",
-        Chi = "Chi", SoulShards = "Soul Shards",
-        ArcaneCharges = "Arcane Charges", Essence = "Essence",
-        Runes = "Runes",
-        SoulFragments = "Soul Fragments",
-    }
-    local GRADIENT_DIR_VALUES = {
-        ["HORIZONTAL"] = "Left to Right",
-        ["HORIZONTAL_REV"] = "Right to Left",
-        ["VERTICAL"] = "Top to Bottom",
-        ["VERTICAL_REV"] = "Bottom to Top",
-    }
-    local GRADIENT_DIR_ORDER = { "HORIZONTAL", "HORIZONTAL_REV", "VERTICAL", "VERTICAL_REV" }
-
-    local function BuildColorsPage(pageName, parent, yOffset)
-        local W = EllesmereUI.Widgets
-        local y = yOffset
-        local _, h
-        local MakeFont = EllesmereUI.MakeFont
-        local GetCustomColorsDB = EllesmereUI.GetCustomColorsDB
-        local CLASS_COLOR_MAP = EllesmereUI.CLASS_COLOR_MAP
-        local DEFAULT_POWER_COLORS = EllesmereUI.DEFAULT_POWER_COLORS
-        local CONTENT_PAD = EllesmereUI.CONTENT_PAD or 20
-
-        parent._showRowDivider = true
-
-        -- Helper to save a color entry
-        local function SaveColorEntry(category, key, data)
-            local db = GetCustomColorsDB()
-            if not db[category] then db[category] = {} end
-            db[category][key] = data
-            EllesmereUI.ApplyColorsToOUF()
-        end
-
-        -------------------------------------------------------------------
-        --  Shared 4-column color grid builder
-        -------------------------------------------------------------------
-        local GRID_COLS     = 4
-        local GRID_ROW_H    = 50
-        local GRID_PAD      = CONTENT_PAD
-        local GRID_SIDE_PAD = 20
-        local SWATCH_SZ     = 20
-
-        -- items = { { label, classToken, getColor, setColor, resetFn }, ... }
-        local function BuildColorGrid(par, yPos, items)            local totalRows = math.ceil(#items / GRID_COLS)
-            local totalW = par:GetWidth() - GRID_PAD * 2
-            local colW = math.floor(totalW / GRID_COLS)
-
-            for row = 0, totalRows - 1 do
-                local rowFrame = CreateFrame("Frame", nil, par)
-                PP.Size(rowFrame, totalW, GRID_ROW_H)
-                PP.Point(rowFrame, "TOPLEFT", par, "TOPLEFT", GRID_PAD, yPos - row * GRID_ROW_H)
-                rowFrame._skipRowDivider = true
-                EllesmereUI.RowBg(rowFrame, par)
-
-                -- Column dividers
-                for d = 1, GRID_COLS - 1 do
-                    local div = rowFrame:CreateTexture(nil, "ARTWORK")
-                    div:SetColorTexture(1, 1, 1, 0.06)
-                    if div.SetSnapToPixelGrid then div:SetSnapToPixelGrid(false); div:SetTexelSnappingBias(0) end
-                    div:SetWidth(1)
-                    local xPos = d * colW
-                    PP.Point(div, "TOP", rowFrame, "TOPLEFT", xPos, 0)
-                    PP.Point(div, "BOTTOM", rowFrame, "BOTTOMLEFT", xPos, 0)
-                end
-
-                for col = 0, GRID_COLS - 1 do
-                    local idx = row * GRID_COLS + col + 1
-                    local item = items[idx]
-                    if not item then break end
-
-                    local cell = CreateFrame("Frame", nil, rowFrame)
-                    cell:SetSize(colW, GRID_ROW_H)
-                    cell:SetPoint("TOPLEFT", rowFrame, "TOPLEFT", col * colW, 0)
-
-                    -- Class-colored label (or white for power colors)
-                    local cr, cg, cb = 1, 1, 1
-                    if item.classToken then
-                        local cc = RAID_CLASS_COLORS and RAID_CLASS_COLORS[item.classToken]
-                        if cc then cr, cg, cb = cc.r, cc.g, cc.b end
-                    end
-                    local label = MakeFont(cell, 13, nil, cr, cg, cb)
-                    label:SetPoint("LEFT", cell, "LEFT", GRID_SIDE_PAD, 0)
-                    label:SetText(item.label)
-
-                    -- Color swatch (right side)
-                    local swatch, updateSwatch = EllesmereUI.BuildColorSwatch(cell, cell:GetFrameLevel() + 2,
-                        function()
-                            local c = item.getColor()
-                            return c.r, c.g, c.b, 1
-                        end,
-                        function(r, g, b)
-                            local c = item.getColor()
-                            c.r = r; c.g = g; c.b = b
-                            item.setColor(c)
-                            local rl = EllesmereUI._widgetRefreshList
-                            if rl then for i2 = 1, #rl do rl[i2]() end end
-                        end, false, SWATCH_SZ)
-                    swatch:SetPoint("RIGHT", cell, "RIGHT", -GRID_SIDE_PAD, 0)
-
-                    -- Undo (reset) button
-                    local undoBtn = CreateFrame("Button", nil, cell)
-                    undoBtn:SetSize(18, 18)
-                    undoBtn:SetPoint("RIGHT", swatch, "LEFT", -10, 0)
-                    undoBtn:SetFrameLevel(cell:GetFrameLevel() + 3)
-                    undoBtn:SetAlpha(0.3)
-                    local undoTex = undoBtn:CreateTexture(nil, "ARTWORK")
-                    undoTex:SetAllPoints()
-                    undoTex:SetTexture(EllesmereUI.UNDO_ICON)
-                    undoBtn:SetScript("OnEnter", function(self)
-                        self:SetAlpha(0.6)
-                        EllesmereUI.ShowWidgetTooltip(self, "Reset to default")
-                    end)
-                    undoBtn:SetScript("OnLeave", function(self)
-                        self:SetAlpha(0.3)
-                        EllesmereUI.HideWidgetTooltip()
-                    end)
-                    undoBtn:SetScript("OnClick", function()
-                        item.resetFn()
-                        EllesmereUI.ApplyColorsToOUF()
-                        updateSwatch()
-                        local rl = EllesmereUI._widgetRefreshList
-                        if rl then for i2 = 1, #rl do rl[i2]() end end
-                    end)
-                end
-            end
-
-            return totalRows * GRID_ROW_H
-        end
-
-        -------------------------------------------------------------------
-        --  FONTS section
-        -------------------------------------------------------------------
-        _, h = W:SectionHeader(parent, "FONTS", y);  y = y - h
-
-        -- For locales that require system fonts (CJK, Cyrillic), the font
-        -- selection dropdowns are not applicable — the system font is used
-        -- automatically regardless of what is selected here.
-        if EllesmereUI.LOCALE_FONT_FALLBACK then
-            local noticeFrame = CreateFrame("Frame", nil, parent)
-            local totalW = parent:GetWidth() - EllesmereUI.CONTENT_PAD * 2
-            PP.Size(noticeFrame, totalW, 70)
-            PP.Point(noticeFrame, "TOPLEFT", parent, "TOPLEFT", EllesmereUI.CONTENT_PAD, y)
-            EllesmereUI.RowBg(noticeFrame, parent)
-
-            local icon = noticeFrame:CreateTexture(nil, "ARTWORK")
-            icon:SetTexture("Interface\\DialogFrame\\UI-Dialog-Icon-AlertOther")
-            PP.Size(icon, 24, 24)
-            PP.Point(icon, "LEFT", noticeFrame, "LEFT", 16, 0)
-            icon:SetVertexColor(EllesmereUI.ELLESMERE_GREEN.r, EllesmereUI.ELLESMERE_GREEN.g, EllesmereUI.ELLESMERE_GREEN.b)
-
-            local msg = noticeFrame:CreateFontString(nil, "OVERLAY")
-            msg:SetFont(EllesmereUI.EXPRESSWAY, 13, EllesmereUI.GetFontOutlineFlag())
-            msg:SetTextColor(1, 1, 1, 0.75)
-            msg:SetJustifyH("LEFT")
-            msg:SetPoint("LEFT", icon, "RIGHT", 12, 4)
-            msg:SetPoint("RIGHT", noticeFrame, "RIGHT", -16, 0)
-            msg:SetText("Your game client language uses a system font automatically.\nFont selection is not available for this locale.")
-
-            y = y - 70
-            return math.abs(y)
-        end
-
-        local fontDropValues = {}
-        local fontDropOrder  = {}
-        local FONT_DIR_GLOBAL = EllesmereUI.MEDIA_PATH .. "fonts\\"
-        for _, name in ipairs(EllesmereUI.FONT_ORDER) do
-            if name == "---" then
-                fontDropOrder[#fontDropOrder + 1] = "---"
-            else
-                local path = EllesmereUI.FONT_BLIZZARD[name]
-                    or (FONT_DIR_GLOBAL .. (EllesmereUI.FONT_FILES[name] or "Expressway.TTF"))
-                local displayName = (EllesmereUI.FONT_DISPLAY_NAMES and EllesmereUI.FONT_DISPLAY_NAMES[name]) or name
-                fontDropValues[name] = { text = displayName, font = path }
-                fontDropOrder[#fontDropOrder + 1] = name
-            end
-        end
-        if EllesmereUI.AppendSharedMediaFonts then
-            EllesmereUI.AppendSharedMediaFonts(fontDropValues, fontDropOrder, { keyByName = true })
-        end
-
-
-        -- Reload popup for font changes
-        local function FontReload()
-            EllesmereUI:ShowConfirmPopup({
-                title       = "Reload Required",
-                message     = "Font changed. A UI reload is needed to apply the new font.",
-                confirmText = "Reload Now",
-                cancelText  = "Later",
-                onConfirm   = function() ReloadUI() end,
-            })
-        end
-
-        local outlineModeValues = {
-            ["none"]    = { text = "Drop Shadow" },
-            ["outline"] = { text = "Outline" },
-            ["thick"]   = { text = "Thick Outline" },
-        }
-        local outlineModeOrder = { "none", "outline", "thick" }
-
-        _, h = W:DualRow(parent, y,
-            { type="dropdown", text="Global Font",
-              values=fontDropValues, order=fontDropOrder,
-              getValue=function() return EllesmereUI.GetFontsDB().global or "Expressway" end,
-              setValue=function(v)
-                  EllesmereUI.GetFontsDB().global = v
-                  local rl = EllesmereUI._widgetRefreshList
-                  if rl then for i2 = 1, #rl do rl[i2]() end end
-                  FontReload()
-              end },
-            { type="dropdown", text="Outline Mode",
-              tooltip="Controls the text rendering style used across all UI elements",
-              values=outlineModeValues, order=outlineModeOrder,
-              getValue=function()
-                  local v = EllesmereUI.GetFontsDB().outlineMode or "none"
-                  if v == "shadow" then v = "none" end
-                  return v
-              end,
-              setValue=function(v)
-                  EllesmereUI.GetFontsDB().outlineMode = v
-                  local rl = EllesmereUI._widgetRefreshList
-                  if rl then for i2 = 1, #rl do rl[i2]() end end
-                  FontReload()
-              end });  y = y - h
-
-        _, h = W:Spacer(parent, y, 20);  y = y - h
-
-        -------------------------------------------------------------------
-        --  CLASS COLORS section
-        -------------------------------------------------------------------
-        _, h = W:SectionHeader(parent, "CLASS COLORS", y);  y = y - h
-
-        local classItems = {}
-        for _, token in ipairs(CLASS_ORDER) do
-            local lbl = CLASS_LABELS[token]
-            local def = CLASS_COLOR_MAP[token] or { r = 1, g = 1, b = 1 }
-            classItems[#classItems + 1] = {
-                label = lbl,
-                classToken = token,
-                getColor = function()
-                    local db = GetCustomColorsDB()
-                    if db.class and db.class[token] then return db.class[token] end
-                    return { r = def.r, g = def.g, b = def.b }
-                end,
-                setColor = function(c)
-                    SaveColorEntry("class", token, c)
-                end,
-                resetFn = function()
-                    local db = GetCustomColorsDB()
-                    if db.class then db.class[token] = nil end
-                end,
-            }
-        end
-
-        h = BuildColorGrid(parent, y, classItems)
-        y = y - h
-
-        _, h = W:Spacer(parent, y, 20);  y = y - h
-
-        -------------------------------------------------------------------
-        --  POWER COLORS section
-        -------------------------------------------------------------------
-        _, h = W:SectionHeader(parent, "POWER COLORS", y);  y = y - h
-
-        local POWER_ORDER = { "MANA", "RAGE", "FOCUS", "ENERGY", "RUNIC_POWER", "FURY" }
-        local powerItems = {}
-        for _, pk in ipairs(POWER_ORDER) do
-            local lbl = POWER_LABELS[pk] or pk
-            local def = DEFAULT_POWER_COLORS[pk] or { r = 1, g = 1, b = 1 }
-            powerItems[#powerItems + 1] = {
-                label = lbl,
-                classToken = nil,
-                getColor = function()
-                    local db = GetCustomColorsDB()
-                    if db.power and db.power[pk] then return db.power[pk] end
-                    return { r = def.r, g = def.g, b = def.b }
-                end,
-                setColor = function(c)
-                    SaveColorEntry("power", pk, c)
-                end,
-                resetFn = function()
-                    EllesmereUI.ResetPowerColor(pk)
-                end,
-            }
-        end
-
-        h = BuildColorGrid(parent, y, powerItems)
-        y = y - h
-
-        _, h = W:Spacer(parent, y, 20);  y = y - h
-
-        return math.abs(y)
-    end
-
-
-    ---------------------------------------------------------------------------
-    --  Runtime: FPS Counter (Extras)
-    ---------------------------------------------------------------------------
-    -- Guard: only one addon copy creates these runtime frames
-    if not _G["EUI_ExtrasRuntimeInit"] then
-    _G["EUI_ExtrasRuntimeInit"] = true
-
-    local fpsFrame
-    local function CreateFPSCounter()
-        if fpsFrame then return end
-        local FONT = EllesmereUI.GetFontPath("extras")
-        local FONT_SIZE = (EllesmereUIDB and EllesmereUIDB.fpsTextSize) or 12
-        local LABEL_SIZE = FONT_SIZE - 2
-        local SHADOW_X, SHADOW_Y = 1, -1
-        fpsFrame = CreateFrame("Frame", "EUI_FPSCounter", UIParent)
-        fpsFrame:SetSize(60, 20)
-        fpsFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 10, -10)
-        fpsFrame:SetFrameStrata("HIGH")
-        fpsFrame:SetFrameLevel(100)
-        fpsFrame:EnableMouse(false)
-
-        local function MakeFS(size)
-            local f = fpsFrame:CreateFontString(nil, "OVERLAY")
-            f:SetFont(FONT, size, EllesmereUI.GetFontOutlineFlag())
-            if EllesmereUI.GetFontUseShadow() then f:SetShadowOffset(SHADOW_X, SHADOW_Y) else f:SetShadowOffset(0, 0) end
-            f:SetTextColor(1, 1, 1, 1)
-            return f
-        end
-
-        local fsFps = MakeFS(FONT_SIZE)
-        fsFps:SetPoint("LEFT")
-        fpsFrame._text = fsFps
-
-        -- Divider helper
-        local DIV_W, DIV_H = 1, 10
-        local DIV_PAD = 6
-
-        local function MakeDivider()
-            local d = fpsFrame:CreateTexture(nil, "OVERLAY")
-            d:SetColorTexture(1, 1, 1, 0.25)
-            d:SetSize(DIV_W, DIV_H)
-            return d
-        end
-
-        local divWorld = MakeDivider()
-        local fsWorldVal = MakeFS(FONT_SIZE)
-        local fsWorldLbl = MakeFS(LABEL_SIZE)
-        fpsFrame._divWorld = divWorld
-        fpsFrame._textWorld = fsWorldVal
-
-        local divLocal = MakeDivider()
-        local fsLocalVal = MakeFS(FONT_SIZE)
-        local fsLocalLbl = MakeFS(LABEL_SIZE)
-        fpsFrame._divLocal = divLocal
-        fpsFrame._textLocal = fsLocalVal
-        fpsFrame._labelWorld = fsWorldLbl
-        fpsFrame._labelLocal = fsLocalLbl
-
-        local function UpdateFPS(self)
-            local db = EllesmereUIDB or {}
-            local c = db.fpsColor
-            local cr, cg, cb, ca = 1, 1, 1, 1
-            if c then cr, cg, cb, ca = c.r or 1, c.g or 1, c.b or 1, c.a or 1 end
-            fsFps:SetTextColor(cr, cg, cb, ca)
-            fsWorldVal:SetTextColor(cr, cg, cb, ca)
-            fsWorldLbl:SetTextColor(cr, cg, cb, ca * 0.6)
-            fsLocalVal:SetTextColor(cr, cg, cb, ca)
-            fsLocalLbl:SetTextColor(cr, cg, cb, ca * 0.6)
-            divWorld:SetColorTexture(cr, cg, cb, ca * 0.35)
-            divLocal:SetColorTexture(cr, cg, cb, ca * 0.35)
-
-            local fps = floor(GetFramerate() + 0.5)
-            fsFps:SetText(fps .. " fps")
-
-            local showWorld = db.fpsShowWorldMS
-            local showLocal = (db.fpsShowLocalMS == nil) and true or db.fpsShowLocalMS
-            local _, _, latHome, latWorld = GetNetStats()
-
-            -- Layout: [FPS] [div] [world ms (world)] [div] [local ms (local)]
-            fsFps:ClearAllPoints()
-            fsFps:SetPoint("LEFT", fpsFrame, "LEFT", 0, 0)
-            local anchor = fsFps
-
-            if showWorld then
-                fsWorldVal:SetText(latWorld .. " ms")
-                fsWorldLbl:SetText("(world)")
-                divWorld:ClearAllPoints()
-                divWorld:SetPoint("LEFT", anchor, "RIGHT", DIV_PAD, 0)
-                divWorld:Show()
-                fsWorldVal:ClearAllPoints()
-                fsWorldVal:SetPoint("LEFT", divWorld, "RIGHT", DIV_PAD, 0)
-                fsWorldVal:Show()
-                fsWorldLbl:ClearAllPoints()
-                fsWorldLbl:SetPoint("LEFT", fsWorldVal, "RIGHT", 3, 0)
-                fsWorldLbl:Show()
-                anchor = fsWorldLbl
-            else
-                divWorld:Hide(); fsWorldVal:Hide(); fsWorldLbl:Hide()
-            end
-
-            if showLocal then
-                fsLocalVal:SetText(latHome .. " ms")
-                fsLocalLbl:SetText("(local)")
-                divLocal:ClearAllPoints()
-                divLocal:SetPoint("LEFT", anchor, "RIGHT", DIV_PAD, 0)
-                divLocal:Show()
-                fsLocalVal:ClearAllPoints()
-                fsLocalVal:SetPoint("LEFT", divLocal, "RIGHT", DIV_PAD, 0)
-                fsLocalVal:Show()
-                fsLocalLbl:ClearAllPoints()
-                fsLocalLbl:SetPoint("LEFT", fsLocalVal, "RIGHT", 3, 0)
-                fsLocalLbl:Show()
-                anchor = fsLocalLbl
-            else
-                divLocal:Hide(); fsLocalVal:Hide(); fsLocalLbl:Hide()
-            end
-
-            -- Resize frame to fit content
-            local totalW = fsFps:GetStringWidth()
-            if showWorld then totalW = totalW + DIV_PAD + DIV_W + DIV_PAD + fsWorldVal:GetStringWidth() + 3 + fsWorldLbl:GetStringWidth() end
-            if showLocal then totalW = totalW + DIV_PAD + DIV_W + DIV_PAD + fsLocalVal:GetStringWidth() + 3 + fsLocalLbl:GetStringWidth() end
-            self:SetSize(totalW + 4, 20)
-        end
-
-        local elapsed = 0
-        fpsFrame:SetScript("OnUpdate", function(self, dt)
-            elapsed = elapsed + dt
-            if elapsed < 1 then return end
-            elapsed = 0
-            UpdateFPS(self)
-        end)
-        fpsFrame._updateNow = function() elapsed = 0; UpdateFPS(fpsFrame) end
-        fpsFrame:Hide()
-    end
-
-    EllesmereUI._applyFPSCounter = function()
-        local shouldShow = EllesmereUIDB and EllesmereUIDB.showFPS
-        if shouldShow then
-            CreateFPSCounter()
-            -- Apply text size to all FPS counter texts
-            local sz = (EllesmereUIDB and EllesmereUIDB.fpsTextSize) or 12
-            local lblSz = sz - 2
-            local fp = EllesmereUI.GetFontPath("extras")
-            local outF = EllesmereUI.GetFontOutlineFlag()
-            if fpsFrame._text then fpsFrame._text:SetFont(fp, sz, outF) end
-            if fpsFrame._textWorld then fpsFrame._textWorld:SetFont(fp, sz, outF) end
-            if fpsFrame._textLocal then fpsFrame._textLocal:SetFont(fp, sz, outF) end
-            if fpsFrame._labelWorld then fpsFrame._labelWorld:SetFont(fp, lblSz, outF) end
-            if fpsFrame._labelLocal then fpsFrame._labelLocal:SetFont(fp, lblSz, outF) end
-            -- Apply saved position and scale
-            local pos = EllesmereUIDB and EllesmereUIDB.fpsPos
-            if pos and pos.point then
-                if pos.scale then pcall(function() fpsFrame:SetScale(pos.scale) end) end
-                fpsFrame:ClearAllPoints()
-                fpsFrame:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 0)
-            end
-            fpsFrame._updateNow()
-            fpsFrame:Show()
-        elseif fpsFrame then
-            fpsFrame:Hide()
-        end
-    end
-
-    -- Register FPS counter as an unlock mode element
-    C_Timer.After(1.5, function()
-        if not EllesmereUI or not EllesmereUI.RegisterUnlockElements then return end
-        local MK = EllesmereUI.MakeUnlockElement
-        EllesmereUI:RegisterUnlockElements({
-            MK({
-                key = "EUI_FPS",
-                label = "FPS Counter",
-                group = "General",
-                order = 700,
-                getFrame = function()
-                    if not fpsFrame then CreateFPSCounter() end
-                    return fpsFrame
-                end,
-                getSize = function()
-                    if fpsFrame then return fpsFrame:GetWidth(), fpsFrame:GetHeight() end
-                    return 80, 20
-                end,
-                noResize = true,
-                savePos = function(key, point, relPoint, x, y)
-                    if not EllesmereUIDB then EllesmereUIDB = {} end
-                    if not point then return end
-                    EllesmereUIDB.fpsPos = { point = point, relPoint = relPoint, x = x, y = y }
-                    if fpsFrame and not EllesmereUI._unlockActive then
-                        fpsFrame:ClearAllPoints()
-                        fpsFrame:SetPoint(point, UIParent, relPoint or point, x or 0, y or 0)
-                    end
-                end,
-                loadPos = function()
-                    return EllesmereUIDB and EllesmereUIDB.fpsPos
-                end,
-                clearPos = function()
-                    if EllesmereUIDB then EllesmereUIDB.fpsPos = nil end
-                end,
-                applyPos = function()
-                    if not fpsFrame then return end
-                    local pos = EllesmereUIDB and EllesmereUIDB.fpsPos
-                    if pos and pos.point then
-                        fpsFrame:ClearAllPoints()
-                        fpsFrame:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 0)
-                    end
-                end,
-            }),
-        })
-    end)
-
-    -- Register Secondary Stats as an unlock mode element
-    C_Timer.After(1.5, function()
-        if not EllesmereUI or not EllesmereUI.RegisterUnlockElements then return end
-        local MK = EllesmereUI.MakeUnlockElement
-        EllesmereUI:RegisterUnlockElements({
-            MK({
-                key = "EUI_SecondaryStats",
-                label = "Secondary Stats",
-                group = "General",
-                order = 710,
-                getFrame = function()
-                    local f = EllesmereUI._getSecondaryStatsFrame and EllesmereUI._getSecondaryStatsFrame()
-                    return f
-                end,
-                getSize = function()
-                    local f = EllesmereUI._getSecondaryStatsFrame and EllesmereUI._getSecondaryStatsFrame()
-                    if f then return f:GetWidth(), f:GetHeight() end
-                    return 160, 60
-                end,
-                noResize = true,
-                savePos = function(key, point, relPoint, x, y)
-                    if not EllesmereUIDB then EllesmereUIDB = {} end
-                    if not point then return end
-                    EllesmereUIDB.secondaryStatsPos = { point = point, relPoint = relPoint, x = x, y = y }
-                    if not EllesmereUI._unlockActive then
-                        local f = EllesmereUI._getSecondaryStatsFrame and EllesmereUI._getSecondaryStatsFrame()
-                        if f then
-                            f:ClearAllPoints()
-                            f:SetPoint(point, UIParent, relPoint or point, x or 0, y or 0)
-                        end
-                    end
-                end,
-                loadPos = function()
-                    return EllesmereUIDB and EllesmereUIDB.secondaryStatsPos
-                end,
-                clearPos = function()
-                    if EllesmereUIDB then EllesmereUIDB.secondaryStatsPos = nil end
-                end,
-                applyPos = function()
-                    local f = EllesmereUI._getSecondaryStatsFrame and EllesmereUI._getSecondaryStatsFrame()
-                    if not f then return end
-                    local pos = EllesmereUIDB and EllesmereUIDB.secondaryStatsPos
-                    if pos and pos.point then
-                        f:ClearAllPoints()
-                        f:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 0)
-                    end
-                end,
-            }),
-        })
-    end)
-
-    -- Hidden button for FPS keybind toggle
-    local fpsBind = CreateFrame("Button", "EUI_FPSBindBtn", UIParent)
-    fpsBind:Hide()
-    fpsBind:SetScript("OnClick", function()
-        if not EllesmereUIDB then EllesmereUIDB = {} end
-        EllesmereUIDB.showFPS = not EllesmereUIDB.showFPS
-        if EllesmereUI._applyFPSCounter then EllesmereUI._applyFPSCounter() end
-    end)
-
-    -- Apply on login
-    C_Timer.After(1, function()
-        if EllesmereUIDB and EllesmereUIDB.showFPS then
-            EllesmereUI._applyFPSCounter()
-        end
-        -- Restore FPS keybind (protected — must wait for combat to drop)
-        local function ApplyFPSBind()
-            if EllesmereUIDB and EllesmereUIDB.fpsToggleKey then
-                SetOverrideBindingClick(fpsBind, true, EllesmereUIDB.fpsToggleKey, "EUI_FPSBindBtn")
-            end
-        end
-        if InCombatLockdown() then
-            local w = CreateFrame("Frame")
-            w:RegisterEvent("PLAYER_REGEN_ENABLED")
-            w:SetScript("OnEvent", function(self)
-                self:UnregisterAllEvents()
-                ApplyFPSBind()
-            end)
-        else
-            ApplyFPSBind()
-        end
-    end)
-
-    ---------------------------------------------------------------------------
-    --  Runtime: Auto Sell Junk + Auto Repair + Repair Warning
-    ---------------------------------------------------------------------------
-    local merchantFrame = CreateFrame("Frame", "EUI_MerchantHandler", UIParent)
-    merchantFrame:RegisterEvent("MERCHANT_SHOW")
-    merchantFrame:SetScript("OnEvent", function()
-        if not EllesmereUIDB then return end
-
-        -- Auto sell junk
-        if EllesmereUIDB.autoSellJunk ~= false then
-            local soldCount = 0
-            for bag = 0, 4 do
-                for slot = 1, C_Container.GetContainerNumSlots(bag) do
-                    local info = C_Container.GetContainerItemInfo(bag, slot)
-                    if info and info.quality == Enum.ItemQuality.Poor and not info.hasNoValue then
-                        C_Container.UseContainerItem(bag, slot)
-                        soldCount = soldCount + 1
-                    end
-                end
-            end
-            if soldCount > 0 then
-                print("|cff0CD29DEllesmereUI:|r Sold " .. soldCount .. " junk item" .. (soldCount > 1 and "s" or "") .. ".")
-            end
-        end
-
-        -- Auto repair
-        if EllesmereUIDB.autoRepair ~= false then
-            if CanMerchantRepair() then
-                local cost, canRepair = GetRepairAllCost()
-                if canRepair and cost > 0 then
-                    local useGuild = IsInGuild() and CanGuildBankRepair() and cost <= GetGuildBankWithdrawMoney()
-                    RepairAllItems(useGuild)
-
-                    -- If guild repair was used, follow up with personal gold for any remainder
-                    if useGuild then
-                        C_Timer.After(0.5, function()
-                            local remainCost, stillNeed = GetRepairAllCost()
-                            if stillNeed and remainCost > 0 then
-                                RepairAllItems(false)
-                            end
-                        end)
-                    end
-
-                    local gold = floor(cost / 10000)
-                    local silver = floor((cost % 10000) / 100)
-                    local src = useGuild and " (guild bank)" or ""
-                    print("|cff0CD29DEllesmereUI:|r Repaired all items for " .. gold .. "g " .. silver .. "s." .. src)
-                end
-            end
-        end
-    end)
-
-    ---------------------------------------------------------------------------
-    --  Runtime: Durability Warning (flashing on-screen text)
-    ---------------------------------------------------------------------------
-    local durWarnOverlay
-    local function CreateDurabilityWarning()
-        if durWarnOverlay then return end
-
-        durWarnOverlay = CreateFrame("Frame", "EUI_DurabilityWarning", UIParent)
-        durWarnOverlay:SetSize(400, 40)
-        durWarnOverlay:SetFrameStrata("DIALOG")
-        durWarnOverlay:SetFrameLevel(500)
-        durWarnOverlay:EnableMouse(false)
-
-        local fs = durWarnOverlay:CreateFontString(nil, "OVERLAY")
-        fs:SetFont(EllesmereUI.EXPRESSWAY or "Fonts\\FRIZQT__.TTF", 30, EllesmereUI.GetFontOutlineFlag())
-        fs:SetPoint("CENTER")
-        fs:SetText("Low Durability")
-        durWarnOverlay._text = fs
-
-        -- Apply font, color, position, scale from saved settings
-        local function ApplySettings()
-            durWarnOverlay:ClearAllPoints()
-            local pos = EllesmereUIDB and EllesmereUIDB.durWarnPos
-            if pos and pos.point then
-                durWarnOverlay:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x or 0, pos.y or 250)
-            else
-                local yOff = EllesmereUIDB and EllesmereUIDB.durWarnYOffset or 250
-                durWarnOverlay:SetPoint("CENTER", UIParent, "CENTER", 0, yOff)
-            end
-            durWarnOverlay:SetScale(1)
-
-            -- Font -- pull from the global "extras" font key
-            local fontPath = EllesmereUI.GetFontPath("extras")
-            local durSz = (EllesmereUIDB and EllesmereUIDB.durWarnTextSize) or 30
-            fs:SetFont(fontPath, durSz, EllesmereUI.GetFontOutlineFlag())
-
-            -- Color
-            local c = EllesmereUIDB and EllesmereUIDB.durWarnColor
-            if c then
-                fs:SetTextColor(c.r, c.g, c.b, 1)
-            else
-                fs:SetTextColor(1, 0.27, 0.27, 1)
-            end
-        end
-        durWarnOverlay._applySettings = ApplySettings
-
-        -- Engine-level pulse animation (no Lua OnUpdate)
-        local ag = fs:CreateAnimationGroup()
-        local fadeOut = ag:CreateAnimation("Alpha")
-        fadeOut:SetFromAlpha(1)
-        fadeOut:SetToAlpha(0.3)
-        fadeOut:SetDuration(0.4)
-        fadeOut:SetOrder(1)
-        local fadeIn = ag:CreateAnimation("Alpha")
-        fadeIn:SetFromAlpha(0.3)
-        fadeIn:SetToAlpha(1)
-        fadeIn:SetDuration(0.4)
-        fadeIn:SetOrder(2)
-        ag:SetLooping("REPEAT")
-
-        durWarnOverlay._show = function(pct)
-            ApplySettings()
-            durWarnOverlay._text:SetText("Low Durability (" .. math.floor(pct) .. "%)")
-            durWarnOverlay:Show()
-            ag:Play()
-        end
-
-        durWarnOverlay:SetScript("OnHide", function()
-            ag:Stop()
-        end)
-
-        durWarnOverlay:Hide()
-    end
-
-    EllesmereUI._applyDurWarn = function()
-        CreateDurabilityWarning()
-        durWarnOverlay._applySettings()
-    end
-
-    -- Preview: show durability warning at its configured position
-    EllesmereUI._durWarnPreview = function()
-        CreateDurabilityWarning()
-        durWarnOverlay._show(25)  -- show with fake 25% for preview (includes ApplySettings)
-        durWarnOverlay._text:SetText("Low Durability (Preview)")
-    end
-
-    EllesmereUI._durWarnHidePreview = function()
-        if durWarnOverlay then durWarnOverlay:Hide() end
-    end
-
-    EllesmereUI._durWarnApplySettings = function()
-        if durWarnOverlay and durWarnOverlay._applySettings then
-            durWarnOverlay._applySettings()
-        end
-    end
-
-    -- Auto-hide durability preview when EUI window closes
-    EllesmereUI:RegisterOnHide(function()
-        if EllesmereUI._durWarnHidePreview then
-            EllesmereUI._durWarnHidePreview()
-        end
-    end)
-
-    -- Durability warning: show while out of combat and below threshold, hide on repair or combat
-    local repairWarnFrame = CreateFrame("Frame", "EUI_RepairWarnHandler", UIParent)
-    repairWarnFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
-    repairWarnFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
-    repairWarnFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
-    repairWarnFrame:RegisterEvent("UPDATE_INVENTORY_DURABILITY")
-
-    local function CheckDurabilityAndShow()
-        if not EllesmereUIDB then return end
-        if EllesmereUIDB.repairWarning == false then
-            if durWarnOverlay then durWarnOverlay:Hide() end
-            return
-        end
-        if InCombatLockdown() then return end
-
-        local lowestDur = 100
-        for slot = 1, 18 do
-            local cur, mx = GetInventoryItemDurability(slot)
-            if cur and mx and mx > 0 then
-                local pct = (cur / mx) * 100
-                if pct < lowestDur then lowestDur = pct end
-            end
-        end
-
-        if lowestDur < (EllesmereUIDB.durWarnThreshold or 40) then
-            CreateDurabilityWarning()
-            durWarnOverlay._show(lowestDur)
-        elseif durWarnOverlay then
-            durWarnOverlay:Hide()
-        end
-    end
-
-    repairWarnFrame:SetScript("OnEvent", function(_, event)
-        if event == "PLAYER_REGEN_DISABLED" then
-            -- Entering combat: hide warning
-            if durWarnOverlay then durWarnOverlay:Hide() end
-            return
-        end
-        -- PLAYER_REGEN_ENABLED, PLAYER_ENTERING_WORLD, UPDATE_INVENTORY_DURABILITY
-        CheckDurabilityAndShow()
-    end)
-
-    ---------------------------------------------------------------------------
-    --  Runtime: Pixel-Perfect UI Scale (UIParent:SetScale)
-    --  Scale is stored directly in EllesmereUIDB.ppUIScale as a decimal.
-    --  Startup applies it early; this handler re-applies at PLAYER_ENTERING_WORLD
-    --  to cover any Blizzard resets, and counter-scales our panel.
-    ---------------------------------------------------------------------------
-    do
-        local function ApplyPPUIScale()
-            local scale = EllesmereUIDB and EllesmereUIDB.ppUIScale
-            if not scale then return end
-            -- Snapshot panel scale before changing UIParent
-            local mf = EllesmereUI._mainFrame
-            local panelScaleBefore
-            if mf then panelScaleBefore = mf:GetEffectiveScale() end
-            EllesmereUI.PP.SetUIScale(scale)
-            -- Counter-scale panel so it stays visually identical
-            if mf and panelScaleBefore then
-                local newEff = UIParent:GetEffectiveScale()
-                if newEff > 0 then mf:SetScale(panelScaleBefore / newEff) end
-            end
-        end
-
-        EllesmereUI._applyPPUIScale = ApplyPPUIScale
-
-        local ppScaleFrame = CreateFrame("Frame")
-        ppScaleFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
-        ppScaleFrame:SetScript("OnEvent", function(self)
-            self:UnregisterEvent("PLAYER_ENTERING_WORLD")
-            ApplyPPUIScale()
-        end)
-    end
-
-    ---------------------------------------------------------------------------
-    --  Runtime: Disable Right Click Targeting
-    ---------------------------------------------------------------------------
-    do
-        local mlookBtn = CreateFrame("Button", "EUI_MouseLookBtn", UIParent)
-        mlookBtn:RegisterForClicks("AnyDown", "AnyUp")
-        mlookBtn:SetScript("OnClick", function(_, _, down)
-            if down then MouselookStart() else MouselookStop() end
-        end)
-
-        local stateFrame = CreateFrame("Frame", "EUI_NoRightClickState", UIParent, "SecureHandlerStateTemplate")
-
-        local function ApplyRightClickTarget()
-            if InCombatLockdown() then
-                -- Defer until combat ends
-                local deferFrame = CreateFrame("Frame")
-                deferFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
-                deferFrame:SetScript("OnEvent", function(self)
-                    self:UnregisterAllEvents()
-                    ApplyRightClickTarget()
-                end)
-                return
-            end
-            if EllesmereUIDB and EllesmereUIDB.disableRightClickTarget then
-                SecureStateDriverManager:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
-                -- Only block right-click on living hostile units so NPCs,
-                -- quest givers, objects, and corpses remain interactable.
-                RegisterStateDriver(stateFrame, "mov", "[@mouseover,harm,nodead]1;0")
-                stateFrame:SetAttribute("_onstate-mov", [[
-                    if newstate == 1 then
-                        self:SetBindingClick(1, "BUTTON2", "EUI_MouseLookBtn")
-                    else
-                        self:ClearBindings()
-                    end
-                ]])
-            else
-                UnregisterStateDriver(stateFrame, "mov")
-                ClearOverrideBindings(stateFrame)
-            end
-        end
-
-        EllesmereUI._applyRightClickTarget = ApplyRightClickTarget
-
-        local rcInitFrame = CreateFrame("Frame")
-        rcInitFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
-        rcInitFrame:SetScript("OnEvent", function(self)
-            self:UnregisterEvent("PLAYER_ENTERING_WORLD")
-            ApplyRightClickTarget()
-        end)
-    end
-
-    ---------------------------------------------------------------------------
-    --  Runtime: Character Crosshair
-    ---------------------------------------------------------------------------
-    do
-        local PP = EllesmereUI.PanelPP
-        local crosshairFrame
-        local function CreateCrosshair()
-            if crosshairFrame then return end
-            crosshairFrame = CreateFrame("Frame", "EUI_CharacterCrosshair", UIParent)
-            crosshairFrame:SetFrameStrata("HIGH")
-            crosshairFrame:SetFrameLevel(100)
-            crosshairFrame:EnableMouse(false)
-            crosshairFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-            crosshairFrame:SetSize(1, 1)
-
-            local function MakeArm()
-                local t = crosshairFrame:CreateTexture(nil, "OVERLAY")
-                if t.SetSnapToPixelGrid then
-                    t:SetSnapToPixelGrid(false)
-                    t:SetTexelSnappingBias(0)
-                end
-                return t
-            end
-            crosshairFrame._hBar = MakeArm()
-            crosshairFrame._vBar = MakeArm()
-        end
-
-        EllesmereUI._applyCrosshair = function()
-            local size = EllesmereUIDB and EllesmereUIDB.crosshairSize or "None"
-            if size == "None" then
-                if crosshairFrame then crosshairFrame:Hide() end
-                return
-            end
-
-            CreateCrosshair()
-
-            local c = EllesmereUIDB and EllesmereUIDB.crosshairColor
-            local cr = c and c.r or 1
-            local cg = c and c.g or 1
-            local cb = c and c.b or 1
-            local ca = c and c.a or 0.75
-
-            -- Thickness in logical pixels: Thin=1, Normal=2, Thick=3
-            -- Do NOT use PP.Scale() on border/line thickness — raw pixel count
-            local thickness = (size == "Thin") and 1 or (size == "Thick") and 3 or 2
-            -- Arm length: 20 logical px each direction, snapped to physical pixels
-            local ARM = PP.Scale(20)
-
-            local hBar = crosshairFrame._hBar
-            local vBar = crosshairFrame._vBar
-
-            hBar:SetColorTexture(cr, cg, cb, ca)
-            hBar:ClearAllPoints()
-            hBar:SetPoint("LEFT",  crosshairFrame, "CENTER", -ARM, 0)
-            hBar:SetPoint("RIGHT", crosshairFrame, "CENTER",  ARM, 0)
-            hBar:SetHeight(thickness)
-
-            vBar:SetColorTexture(cr, cg, cb, ca)
-            vBar:ClearAllPoints()
-            vBar:SetPoint("TOP",    crosshairFrame, "CENTER", 0,  ARM)
-            vBar:SetPoint("BOTTOM", crosshairFrame, "CENTER", 0, -ARM)
-            vBar:SetWidth(thickness)
-
-            crosshairFrame:Show()
-        end
-
-        -- Apply on login
-        C_Timer.After(1, function()
-            if EllesmereUIDB and EllesmereUIDB.crosshairSize and EllesmereUIDB.crosshairSize ~= "None" then
-                EllesmereUI._applyCrosshair()
-            end
-        end)
-    end
-
-    end  -- EUI_ExtrasRuntimeInit guard
-
-    ---------------------------------------------------------------------------
-    --  Profiles page
-    ---------------------------------------------------------------------------
 
     -- Builds a red warning string from a decoded payload's meta vs current client.
     -- Returns nil if no mismatch.
@@ -4463,24 +4900,19 @@ initFrame:SetScript("OnEvent", function(self)
     --  Enabled Addons page
     ---------------------------------------------------------------------------
 
-    local disabledList = { PAGE_CORE }
-    local disabledTips = { [PAGE_CORE] = "Coming Soon" }
-
     EllesmereUI:RegisterModule(GLOBAL_KEY, {
         title       = "Global Settings",
         description = "General options for all EllesmereUI addons.",
-        pages       = { PAGE_GENERAL, PAGE_PROFILES, PAGE_CORE, PAGE_COLORS },
-        disabledPages = disabledList,
-        disabledPageTooltips = disabledTips,
+        pages       = { PAGE_GENERAL, PAGE_PROFILES, PAGE_QOL, PAGE_COLORS },
         buildPage   = function(pageName, parent, yOffset)
             if pageName == PAGE_GENERAL then
                 return BuildGeneralPage(pageName, parent, yOffset)
             elseif pageName == PAGE_COLORS then
                 return BuildColorsPage(pageName, parent, yOffset)
-            elseif pageName == PAGE_CORE then
-                return BuildCoreOptionsPage(pageName, parent, yOffset)
             elseif pageName == PAGE_PROFILES then
                 return BuildProfilesPage(pageName, parent, yOffset)
+            elseif pageName == PAGE_QOL then
+                return BuildQoLPage(pageName, parent, yOffset)
             end
         end,
         onReset     = function()
@@ -4523,9 +4955,36 @@ initFrame:SetScript("OnEvent", function(self)
                 EllesmereUIDB.unlockAnchors = nil
                 EllesmereUIDB.unlockWidthMatch = nil
                 EllesmereUIDB.unlockHeightMatch = nil
+                -- QoL Features defaults
+                EllesmereUIDB.hideBlizzardPartyFrame = false
+                EllesmereUIDB.quickLoot = false
+                EllesmereUIDB.quickLootShiftSkip = false
+                EllesmereUIDB.skipCinematics = false
+                EllesmereUIDB.skipCinematicsAuto = false
+                EllesmereUIDB.autoFillDelete = false
+                EllesmereUIDB.sortByMythicScore = false
+                EllesmereUIDB.autoInsertKeystone = false
+                EllesmereUIDB.instanceResetAnnounce = false
+                EllesmereUIDB.instanceResetAnnounceMsg = ""
+                EllesmereUIDB.quickSignup = false
+                EllesmereUIDB.persistSignupNote = false
+                EllesmereUIDB.ahCurrentExpansion = false
+                EllesmereUIDB.healthMacroEnabled = false
+                EllesmereUIDB.healthMacroPrio1 = 1
+                EllesmereUIDB.healthMacroPrio2 = 2
+                EllesmereUIDB.healthMacroPrio3 = 3
+                EllesmereUIDB.foodMacroEnabled = false
+                EllesmereUIDB.hideScreenshotStatus = false
+                EllesmereUIDB.trainAllButton = false
+                EllesmereUIDB.autoUnwrapCollections = false
+                EllesmereUIDB.autoOpenContainers = false
+                EllesmereUIDB.autoRepairGuild = false
             end
             if EllesmereUI._applyRightClickTarget then
                 EllesmereUI._applyRightClickTarget()
+            end
+            if EllesmereUI._applyHideBlizzardPartyFrame then
+                EllesmereUI._applyHideBlizzardPartyFrame()
             end
             if EllesmereUI._applyFPSCounter then
                 EllesmereUI._applyFPSCounter()
