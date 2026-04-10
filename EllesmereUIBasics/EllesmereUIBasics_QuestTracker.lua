@@ -1993,15 +1993,17 @@ function EQT:Refresh(skipAlphaFlash)
         self.rows[#self.rows + 1] = r
     end
 
-    local function AddObjRow(text, cr, cg, cb, isFinished, indent, justifyH)
+    local function AddObjRow(text, cr, cg, cb, isFinished, indent, justifyH, preferredSize, minSize, noWrap)
         local leftInset = indent or 20
         local align = justifyH or "LEFT"
         local r = AcquireRow(content)
-        local objFS = isFinished and (compFS or ofs) or ofs
+        local objFS = preferredSize or (isFinished and (compFS or ofs) or ofs)
+        local minFS = minSize or objFS
         SetFontSafe(r.text, ofp, objFS, off)
         r.text:SetTextColor(cr, cg, cb)
         ApplyFontShadow(r.text)
         r.text:SetText(text)
+        r.text:SetWordWrap(not noWrap)
         r.text:Show()
         r.text:SetJustifyH(align)
         r.text:ClearAllPoints()
@@ -2019,6 +2021,22 @@ function EQT:Refresh(skipAlphaFlash)
         r.frame:SetPoint("TOPRIGHT", content, "TOPRIGHT", 0, -yOff)
         -- Force text width so GetStringHeight respects word wrap on first layout
         r.text:SetWidth(blockW)
+
+        if noWrap and minFS < objFS then
+            local fitted = false
+            for size = objFS, minFS, -1 do
+                SetFontSafe(r.text, ofp, size, off)
+                ApplyFontShadow(r.text)
+                if r.text:GetStringWidth() <= blockW then
+                    fitted = true
+                    break
+                end
+            end
+            if not fitted then
+                r.text:SetWordWrap(true)
+            end
+        end
+
         local th = r.text:GetStringHeight()
         if th < ofs then th = ofs end
         local rh = th + 4; r.frame:SetHeight(rh); r.text:SetHeight(rh)
@@ -2182,7 +2200,7 @@ function EQT:Refresh(skipAlphaFlash)
                 for _, a in ipairs(mplusSection.affixes) do
                     affixNames[#affixNames + 1] = a.name
                 end
-                AddObjRow(table.concat(affixNames, "  \194\183  "), 0.55, 0.55, 0.55, false, 14)
+                AddObjRow(table.concat(affixNames, "  \194\183  "), 0.55, 0.55, 0.55, false, 14, nil, ofs, 8, true)
             end
 
             -- Main timer row (countdown or elapsed)
@@ -2310,23 +2328,23 @@ function EQT:Refresh(skipAlphaFlash)
                 end
             end
 
-            -- +2 / +3 threshold row
+            -- +3 / +2 threshold row
             if (mplusSection.showPlusTwo or mplusSection.showPlusThree) and mplusSection.maxTime > 0 then
                 local parts = {}
-                if mplusSection.showPlusTwo then
-                    local diff = mplusSection.plusTwoTime - mplusSection.elapsed
-                    if diff >= 0 then
-                        parts[#parts + 1] = format("|cff66ff66+2  %s|r", FormatTimeLeft(diff))
-                    else
-                        parts[#parts + 1] = format("|cff666666+2  -%s|r", FormatTimeLeft(math.abs(diff)))
-                    end
-                end
                 if mplusSection.showPlusThree then
                     local diff = mplusSection.plusThreeTime - mplusSection.elapsed
                     if diff >= 0 then
                         parts[#parts + 1] = format("|cff4dccff+3  %s|r", FormatTimeLeft(diff))
                     else
                         parts[#parts + 1] = format("|cff666666+3  -%s|r", FormatTimeLeft(math.abs(diff)))
+                    end
+                end
+                if mplusSection.showPlusTwo then
+                    local diff = mplusSection.plusTwoTime - mplusSection.elapsed
+                    if diff >= 0 then
+                        parts[#parts + 1] = format("|cff66ff66+2  %s|r", FormatTimeLeft(diff))
+                    else
+                        parts[#parts + 1] = format("|cff666666+2  -%s|r", FormatTimeLeft(math.abs(diff)))
                     end
                 end
                 if #parts > 0 then

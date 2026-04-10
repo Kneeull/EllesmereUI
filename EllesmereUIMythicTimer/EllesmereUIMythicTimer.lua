@@ -420,6 +420,28 @@ local function ApplyShadow(fs)
     end
 end
 
+local function SetFittedText(fs, text, maxWidth, preferredSize, minSize)
+    if not fs then return end
+    text = text or ""
+    preferredSize = preferredSize or 10
+    minSize = minSize or 8
+    local outline = SOutline()
+    -- Ensure a valid font exists before first SetText; detached startup can
+    -- render this FontString before any prior SetFont call has happened.
+    SetFS(fs, preferredSize, outline)
+    ApplyShadow(fs)
+    fs:SetText(text)
+
+    for size = preferredSize, minSize, -1 do
+        SetFS(fs, size, outline)
+        ApplyShadow(fs)
+        fs:SetText(text)
+        if not maxWidth or fs:GetStringWidth() <= maxWidth then
+            return
+        end
+    end
+end
+
 local function GetAccentColor()
     if EllesmereUI.ResolveThemeColor then
         local theme = EllesmereUIDB and EllesmereUIDB.accentTheme or "Class Colored"
@@ -474,7 +496,7 @@ local function CreateStandaloneFrame()
 
     -- Affixes
     f._affixFS = f:CreateFontString(nil, "OVERLAY")
-    f._affixFS:SetWordWrap(false)
+    f._affixFS:SetWordWrap(true)
 
     -- Timer
     f._timerFS = f:CreateFontString(nil, "OVERLAY")
@@ -556,10 +578,8 @@ local function RenderStandalone()
             local name = C_ChallengeMode.GetAffixInfo(id)
             if name then names[#names + 1] = name end
         end
-        SetFS(f._affixFS, 10)
-        ApplyShadow(f._affixFS)
         f._affixFS:SetTextColor(0.55, 0.55, 0.55)
-        f._affixFS:SetText(table.concat(names, "  \194\183  "))
+        SetFittedText(f._affixFS, table.concat(names, "  \194\183  "), innerW, 10, 8)
         f._affixFS:ClearAllPoints()
         f._affixFS:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, y)
         f._affixFS:SetPoint("TOPRIGHT", f, "TOPRIGHT", -PAD, y)
@@ -656,20 +676,20 @@ local function RenderStandalone()
     -- +2 / +3 threshold text
     if (p.showPlusTwo or p.showPlusThree) and maxTime > 0 then
         local parts = {}
-        if p.showPlusTwo then
-            local diff = plusTwoT - elapsed
-            if diff >= 0 then
-                parts[#parts + 1] = format("|cff66ff66+2  %s|r", FormatTime(diff))
-            else
-                parts[#parts + 1] = format("|cff666666+2  -%s|r", FormatTime(abs(diff)))
-            end
-        end
         if p.showPlusThree then
             local diff = plusThreeT - elapsed
             if diff >= 0 then
                 parts[#parts + 1] = format("|cff4dccff+3  %s|r", FormatTime(diff))
             else
                 parts[#parts + 1] = format("|cff666666+3  -%s|r", FormatTime(abs(diff)))
+            end
+        end
+        if p.showPlusTwo then
+            local diff = plusTwoT - elapsed
+            if diff >= 0 then
+                parts[#parts + 1] = format("|cff66ff66+2  %s|r", FormatTime(diff))
+            else
+                parts[#parts + 1] = format("|cff666666+2  -%s|r", FormatTime(abs(diff)))
             end
         end
         if #parts > 0 then
@@ -964,46 +984,3 @@ function EMT:OnEnable()
     end
 end
 
--------------------------------------------------------------------------------
---  Slash commands
--------------------------------------------------------------------------------
-SLASH_EMTIMER1 = "/mpt"
-SLASH_EMTIMER2 = "/mythictimer"
-SlashCmdList.EMTIMER = function(msg)
-    msg = (msg or ""):lower():trim()
-    if msg == "test" then
-        if not db then return end
-        currentRun.active        = true
-        currentRun.completed     = false
-        currentRun.mapID         = 375
-        currentRun.mapName       = "Mists of Tirna Scithe"
-        currentRun.level         = 15
-        currentRun.maxTime       = 1800
-        currentRun.elapsed       = 720
-        currentRun.deaths        = 2
-        currentRun.deathTimeLost = 10
-        currentRun.affixes       = { 9, 7, 124 }
-        wipe(currentRun.objectives)
-        currentRun.objectives = {
-            { name = "Ingra Maloch",       completed = true,  elapsed = 245, quantity = 1,   totalQuantity = 1,   isWeighted = false },
-            { name = "Mistcaller",         completed = true,  elapsed = 512, quantity = 1,   totalQuantity = 1,   isWeighted = false },
-            { name = "Quarry camps liberated", completed = false, elapsed = 0, quantity = 3, totalQuantity = 6,   isWeighted = false },
-            { name = "Tred'ova",           completed = false, elapsed = 0,   quantity = 0,   totalQuantity = 1,   isWeighted = false },
-            { name = "Enemy Forces",       completed = false, elapsed = 0,   quantity = 11,  totalQuantity = 100, isWeighted = true  },
-        }
-        if updateTicker then updateTicker:Cancel() end
-        updateTicker = C_Timer.NewTicker(1, OnTimerTick)
-        OnTimerTick()
-        SuppressBlizzardMPlus()
-        NotifyQuestTracker()
-        RenderStandalone()
-        print("|cff0cd29fEllesmereUI|r Mythic+ Timer: test mode active. Use /mpt reset to clear.")
-    elseif msg == "reset" then
-        ResetRun()
-        print("|cff0cd29fEllesmereUI|r Mythic+ Timer: reset.")
-    else
-        print("|cff0cd29fEllesmereUI|r Mythic+ Timer:")
-        print("  /mpt test  — Simulate an M+ run in the quest tracker")
-        print("  /mpt reset — Clear the simulated run")
-    end
-end
