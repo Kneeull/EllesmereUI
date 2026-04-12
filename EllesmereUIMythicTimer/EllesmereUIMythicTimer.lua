@@ -698,6 +698,7 @@ local function StartRun()
     currentRun.affixes       = affixes or {}
     currentRun.preciseStart = GetTimePreciseSec and GetTimePreciseSec() or nil
     currentRun.preciseCompletedElapsed = nil
+    currentRun._lastDungeonComplete = false
     wipe(currentRun.objectives)
 
     if updateTicker then updateTicker:Cancel() end
@@ -737,6 +738,7 @@ local function ResetRun()
     currentRun.deathTimeLost = 0
     currentRun.preciseStart = nil
     currentRun.preciseCompletedElapsed = nil
+    currentRun._lastDungeonComplete = false
     wipe(currentRun.affixes)
     wipe(currentRun.objectives)
     if db and db.profile then db.profile._activeRunSplits = nil end
@@ -1614,22 +1616,27 @@ local function ApplyStandalonePosition()
     end
 end
 
-local function ArePrimaryObjectivesComplete()
+-- True only when every scenario objective is complete: all bosses AND the
+-- weighted Enemy Forces bar. This is the real "dungeon finished" condition.
+-- Using just primary objectives is wrong — killing the last boss before
+-- trash reaches 100% does not end the run in WoW, and saving at that moment
+-- records an artificially short time.
+local function IsDungeonComplete()
     local numCriteria = select(3, C_Scenario.GetStepInfo()) or 0
     if numCriteria == 0 then return false end
 
-    local seenPrimary = false
+    local seenAny = false
     for i = 1, numCriteria do
         local info = C_ScenarioInfo.GetCriteriaInfo(i)
-        if info and not info.isWeightedProgress then
-            seenPrimary = true
+        if info then
+            seenAny = true
             if not info.completed then
                 return false
             end
         end
     end
 
-    return seenPrimary
+    return seenAny
 end
 
 local runtimeFrame = CreateFrame("Frame")
@@ -1664,11 +1671,27 @@ local function RuntimeOnUpdate(_, elapsed)
     if activeMapID then
         if not currentRun.active and not currentRun.completed then
             StartRun()
-        elseif currentRun.active and ArePrimaryObjectivesComplete() then
+        elseif currentRun.active and IsDungeonComplete() then
+            -- Every objective done (bosses + Enemy Forces). Blizzard is about
+            -- to clear the challenge map, so save now with the accurate time.
             CompleteRun()
         end
+        -- Cache completion state while scenario APIs still answer. Used below
+        -- to salvage a run if the challenge map clears between polls.
+        if currentRun.active then
+            currentRun._lastDungeonComplete = IsDungeonComplete()
+        end
     elseif currentRun.active or currentRun.completed then
-        ResetRun()
+        -- Challenge map is gone. If we saw the dungeon complete on the last
+        -- poll, or Blizzard ended the map while the run was active (which
+        -- itself implies completion — you can't abandon an M+ without the
+        -- map clearing via completion or timer-out), salvage it as a
+        -- completion rather than discarding.
+        if currentRun.active and currentRun._lastDungeonComplete then
+            CompleteRun()
+        else
+            ResetRun()
+        end
     end
 end
 
