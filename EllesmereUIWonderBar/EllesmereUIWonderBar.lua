@@ -4076,4 +4076,3 @@ do
     WB:RegisterModule("micromenu", M)
 end
 
--- End of WonderBar rewrite.
