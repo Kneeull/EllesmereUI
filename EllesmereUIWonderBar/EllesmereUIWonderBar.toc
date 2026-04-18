@@ -4,13 +4,13 @@
 ## Group: EllesmereUI
 ## Notes: Information bar for EllesmereUI — clock, gold, reputation and more
 ## Author: Ellesmere
-## Version: 2.2.3
+## Version: 6.7.9
 ## Dependencies: EllesmereUI
 ## SavedVariables: EllesmereUIWonderBarDB
 ## IconTexture: Interface\AddOns\EllesmereUI\media\eg-logo.tga
 
-# Runtime (single file; uses EllesmereUI core for PP/accent/fonts/LibStub/CallbackHandler)
+# Runtime
 EllesmereUIWonderBar.lua
 
-# Options panel injection into EllesmereUIBasics
+# Options
 EllesmereUIWonderBar_Options.lua
